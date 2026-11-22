@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.ImageView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -47,6 +48,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
@@ -141,7 +143,7 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v9"
+private const val PREFS_NAME = "joe_player_prefs_v10"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 
@@ -175,6 +177,17 @@ private fun applyFullScreenSystemBars(activity: ComponentActivity?, fullScreen: 
         } else {
             WindowCompat.setDecorFitsSystemWindows(window, true)
             controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+}
+
+private fun applyKeepScreenOn(activity: ComponentActivity?, keepScreenOn: Boolean) {
+    val act = activity ?: return
+    runCatching {
+        if (keepScreenOn) {
+            act.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            act.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 }
@@ -281,6 +294,7 @@ private fun JoeApp() {
     var isLoading by remember { mutableStateOf(false) }
 
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
+    var isPlayingState by remember { mutableStateOf(false) }
 
     fun currentHeaders(): CustomHeadersConfig {
         return CustomHeadersConfig(
@@ -351,10 +365,27 @@ private fun JoeApp() {
         }
     }
 
+    LaunchedEffect(activeChannel, isPlayingState) {
+        val shouldKeepAwake = activeChannel != null && (isPlayingState || exoPlayer.playWhenReady)
+        applyKeepScreenOn(activity, shouldKeepAwake)
+    }
+
     DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                isPlayingState = isPlaying
+            }
+
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                isPlayingState = playWhenReady || exoPlayer.isPlaying
+            }
+        }
+        exoPlayer.addListener(listener)
         runCatching { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
         applyFullScreenSystemBars(activity, false)
         onDispose {
+            exoPlayer.removeListener(listener)
+            applyKeepScreenOn(activity, false)
             runCatching { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
             applyFullScreenSystemBars(activity, false)
             runCatching { exoPlayer.release() }
@@ -368,8 +399,10 @@ private fun JoeApp() {
                 exoPlayer.setMediaItem(MediaItem.fromUri(target))
                 exoPlayer.prepare()
                 exoPlayer.playWhenReady = autoPlayOnSelect
+                isPlayingState = autoPlayOnSelect
             } else {
                 exoPlayer.stop()
+                isPlayingState = false
             }
         }
     }
@@ -545,10 +578,12 @@ private fun JoeApp() {
                     PlayerView(ctx).apply {
                         player = exoPlayer
                         useController = false
+                        keepScreenOn = true
                         applyPlayerResizeMode(this, fillScreenAspect)
                     }
                 },
                 update = { view ->
+                    view.keepScreenOn = true
                     applyPlayerResizeMode(view, fillScreenAspect)
                 },
                 modifier = Modifier.fillMaxSize()
@@ -1146,7 +1181,11 @@ private fun JoeApp() {
                                     PlayerView(ctx).apply {
                                         player = exoPlayer
                                         useController = true
+                                        keepScreenOn = true
                                     }
+                                },
+                                update = { view ->
+                                    view.keepScreenOn = true
                                 },
                                 modifier = Modifier.fillMaxSize()
                             )
