@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -170,7 +171,7 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v18"
+private const val PREFS_NAME = "joe_player_prefs_v19"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
@@ -406,6 +407,7 @@ private fun JoeApp() {
         runCatching {
             playbackErrorMessage = null
             playbackStatusLabel = "Yeniden bağlanılıyor..."
+            exoPlayer.clearMediaItems()
             exoPlayer.setMediaItem(MediaItem.fromUri(target))
             exoPlayer.prepare()
             exoPlayer.playWhenReady = true
@@ -584,7 +586,7 @@ private fun JoeApp() {
         }
     }
 
-    LaunchedEffect(activeChannel?.url, autoPlayOnSelect) {
+    LaunchedEffect(activeChannel?.id, activeChannel?.url, autoPlayOnSelect) {
         val current = activeChannel
         val target = current?.url
         runCatching {
@@ -597,6 +599,7 @@ private fun JoeApp() {
                         it.channel.url == current.url
                 }?.lastPositionMs ?: 0L
                 recordRecentWatch(current, savedPos, persistDisk = false)
+                exoPlayer.clearMediaItems()
                 exoPlayer.setMediaItem(MediaItem.fromUri(target))
                 if (current.kind != MediaKind.LIVE && savedPos > 2_000L) {
                     exoPlayer.seekTo(savedPos)
@@ -607,6 +610,7 @@ private fun JoeApp() {
             } else {
                 playbackStatusLabel = "Hazır"
                 exoPlayer.stop()
+                exoPlayer.clearMediaItems()
                 isPlayingState = false
             }
         }
@@ -852,7 +856,9 @@ private fun JoeApp() {
             if (sameGroup.isNotEmpty()) sameGroup else allChannels.filter { it.kind == currentCh.kind }
         }
         val currentIdxInGroup = sameCategoryChannels.indexOfFirst {
-            it.id == currentCh.id && it.kind == currentCh.kind
+            it.id == currentCh.id && it.kind == currentCh.kind && it.url == currentCh.url
+        }.let { idx ->
+            if (idx >= 0) idx else sameCategoryChannels.indexOfFirst { it.id == currentCh.id && it.kind == currentCh.kind }
         }
         val prevChannel = if (currentIdxInGroup > 0) sameCategoryChannels[currentIdxInGroup - 1] else null
         val nextChannel = if (currentIdxInGroup >= 0 && currentIdxInGroup < sameCategoryChannels.lastIndex) {
@@ -1120,11 +1126,11 @@ private fun JoeApp() {
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        items(
+                        itemsIndexed(
                             items = sameCategoryChannels,
-                            key = { idx -> "${currentCh.kind.name}-${idx.id}" }
-                        ) { ch ->
-                            val isCurrent = ch.id == currentCh.id && ch.kind == currentCh.kind
+                            key = { rowIdx, ch -> "${currentCh.kind.name}-${rowIdx}-${ch.id}" }
+                        ) { _, ch ->
+                            val isCurrent = ch.id == currentCh.id && ch.kind == currentCh.kind && ch.url == currentCh.url
 
                             Surface(
                                 onClick = {
@@ -1232,7 +1238,7 @@ private fun JoeApp() {
 
                         else -> {
                             LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                items(seriesEpisodes, key = { it.id }) { ep ->
+                                itemsIndexed(seriesEpisodes, key = { idx, ep -> "${idx}-${ep.id}" }) { _, ep ->
                                     Surface(
                                         onClick = {
                                             activeChannel = ChannelEntry(
@@ -1747,10 +1753,10 @@ private fun JoeApp() {
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            items(
+                            itemsIndexed(
                                 items = filteredAndSorted,
-                                key = { ch -> "${ch.kind.name}-${ch.id}" }
-                            ) { channel ->
+                                key = { idx, ch -> "grid-${ch.kind.name}-${idx}-${ch.id}" }
+                            ) { _, channel ->
                                 val badge = resumeBadgeByKey["${channel.kind.name}-${channel.id}-${channel.url}"]
                                 MediaShelfCard(
                                     channel = channel,
@@ -1773,10 +1779,10 @@ private fun JoeApp() {
                             contentPadding = PaddingValues(vertical = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(20.dp)
                         ) {
-                            items(
+                            itemsIndexed(
                                 items = categoryEntries,
-                                key = { entry -> "${selectedMediaKind.name}-${entry.key}" }
-                            ) { (categoryName, channelList) ->
+                                key = { idx, entry -> "cat-${selectedMediaKind.name}-${idx}-${entry.key}" }
+                            ) { _, (categoryName, channelList) ->
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -1817,10 +1823,10 @@ private fun JoeApp() {
                                         contentPadding = PaddingValues(horizontal = 16.dp),
                                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {
-                                        items(
+                                        itemsIndexed(
                                             items = channelList,
-                                            key = { ch -> "${categoryName}-${ch.kind.name}-${ch.id}" }
-                                        ) { channel ->
+                                            key = { chIdx, ch -> "row-${categoryName}-${ch.kind.name}-${chIdx}-${ch.id}" }
+                                        ) { _, channel ->
                                             val badge = resumeBadgeByKey["${channel.kind.name}-${channel.id}-${channel.url}"]
                                             MediaShelfCard(
                                                 channel = channel,
@@ -2573,7 +2579,7 @@ private fun JoeApp() {
                         }
                     }
 
-                    items(playlists, key = { it.id }) { pl ->
+                    itemsIndexed(playlists, key = { idx, pl -> "${idx}-${pl.id}" }) { _, pl ->
                         val liveCnt = pl.channels.count { it.kind == MediaKind.LIVE }
                         val movieCnt = pl.channels.count { it.kind == MediaKind.MOVIES }
                         val seriesCnt = pl.channels.count { it.kind == MediaKind.SERIES }
