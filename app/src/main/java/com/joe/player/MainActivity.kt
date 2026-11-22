@@ -51,6 +51,8 @@ import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -123,8 +125,11 @@ private val AccentOrange = Color(0xFFE66C2C)
 private val CardDarkBg = Color(0xFF2B2B2B)
 private val ChipDarkBg = Color(0xFF1F1F1F)
 private val LightPageBg = Color(0xFFF7F7F7)
-private const val PREFS_NAME = "joe_player_prefs_v2"
+private const val PREFS_NAME = "joe_player_prefs_v3"
 private const val KEY_STATE_JSON = "saved_state_json"
+
+// Aynı anda en fazla 4 görsel indirerek bellek/ağ şişmesini önler
+private val imageDownloadSemaphore = Semaphore(4)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -166,7 +171,6 @@ private fun applyPlayerResizeMode(playerView: PlayerView, zoomToFill: Boolean) {
         if (aspectLayout != null) {
             val clazz = aspectLayout.javaClass
             val setModeMethod = clazz.getMethod("setResizeMode", Int::class.javaPrimitiveType)
-            // AspectRatioFrameLayout.RESIZE_MODE_FIT = 0, RESIZE_MODE_ZOOM = 3
             val modeValue = if (zoomToFill) 3 else 0
             setModeMethod.invoke(aspectLayout, modeValue)
         }
@@ -244,7 +248,9 @@ private fun JoeApp() {
 
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
 
+    // Kaydetme işlemini arka planda ve kısa gecikmeli (debounce) yaparak UI'yı kilitlemez
     LaunchedEffect(allChannels, playlists, xtreamServerInput, xtreamUserInput, xtreamPassInput, listNameInput, autoPlayOnSelect) {
+        delay(600L)
         val currentXtream = if (xtreamServerInput.isNotBlank() || xtreamUserInput.isNotBlank() || xtreamPassInput.isNotBlank()) {
             XtreamCredentials(
                 serverUrl = xtreamServerInput.trim(),
@@ -254,16 +260,16 @@ private fun JoeApp() {
         } else {
             null
         }
-        savePersistentState(
-            context = context,
-            snapshot = PersistentSnapshot(
-                channels = allChannels,
-                playlists = playlists,
-                xtream = currentXtream,
-                lastListName = listNameInput,
-                autoPlay = autoPlayOnSelect
-            )
+        val snapshotToSave = PersistentSnapshot(
+            channels = allChannels,
+            playlists = playlists,
+            xtream = currentXtream,
+            lastListName = listNameInput,
+            autoPlay = autoPlayOnSelect
         )
+        withContext(Dispatchers.IO) {
+            savePersistentState(context = context, snapshot = snapshotToSave)
+        }
     }
 
     LaunchedEffect(isPlayerFullScreen, activeChannel) {
@@ -335,9 +341,9 @@ private fun JoeApp() {
             id = "pl-${System.currentTimeMillis()}-${playlists.size}",
             title = playlistTitle.ifBlank { "Liste ${playlists.size + 1}" },
             sourceInfo = sourceInfo,
-            channels = newChannels
+            channels = newChannels.take(300)
         )
-        playlists = listOf(newPlaylist) + playlists
+        playlists = listOf(newPlaylist) + playlists.take(10)
         val liveCount = newChannels.count { it.kind == MediaKind.LIVE }
         val movieCount = newChannels.count { it.kind == MediaKind.MOVIES }
         val seriesCount = newChannels.count { it.kind == MediaKind.SERIES }
@@ -554,17 +560,11 @@ private fun JoeApp() {
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        items(sameCategoryChannels, key = { it.id }) { ch ->
-                            val isCurrent = ch.id == currentCh.id
-                            val chPoster = ch.posterUrl?.trim()?.takeIf { it.isNotBlank() }
-                            LaunchedEffect(chPoster) {
-                                if (chPoster != null && !imageCache.containsKey(chPoster)) {
-                                    imageCache[chPoster] = withContext(Dispatchers.IO) {
-                                        downloadImageBitmap(chPoster)
-                                    }
-                                }
-                            }
-                            val chBitmap = if (chPoster != null) imageCache[chPoster] else null
+                        items(
+                            items = sameCategoryChannels,
+                            key = { "${it.kind.name}-${it.id}" }
+                        ) { ch ->
+                            val isCurrent = ch.id == currentCh.id && ch.kind == currentCh.kind
 
                             Surface(
                                 onClick = {
@@ -584,7 +584,7 @@ private fun JoeApp() {
                                 ),
                                 modifier = Modifier
                                     .width(150.dp)
-                                    .height(82.dp)
+                                    .height(78.dp)
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -595,26 +595,17 @@ private fun JoeApp() {
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(40.dp)
+                                            .size(36.dp)
                                             .clip(RoundedCornerShape(6.dp))
                                             .background(Color(0xFF1A1A1A)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        if (chBitmap != null) {
-                                            Image(
-                                                bitmap = chBitmap,
-                                                contentDescription = ch.name,
-                                                contentScale = ContentScale.Crop,
-                                                modifier = Modifier.fillMaxSize()
-                                            )
-                                        } else {
-                                            Icon(
-                                                imageVector = Icons.Default.LiveTv,
-                                                contentDescription = null,
-                                                tint = if (isCurrent) AccentOrange else Color.LightGray,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                        }
+                                        Icon(
+                                            imageVector = Icons.Default.LiveTv,
+                                            contentDescription = null,
+                                            tint = if (isCurrent) AccentOrange else Color.LightGray,
+                                            modifier = Modifier.size(18.dp)
+                                        )
                                     }
 
                                     Column(modifier = Modifier.weight(1f)) {
@@ -1054,10 +1045,13 @@ private fun JoeApp() {
                                             contentPadding = PaddingValues(horizontal = 16.dp),
                                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                                         ) {
-                                            items(channelList, key = { it.id }) { channel ->
+                                            items(
+                                                items = channelList,
+                                                key = { "${it.kind.name}-${it.id}" }
+                                            ) { channel ->
                                                 MediaShelfCard(
                                                     channel = channel,
-                                                    isSelected = activeChannel?.id == channel.id,
+                                                    isSelected = activeChannel?.id == channel.id && activeChannel?.kind == channel.kind,
                                                     imageCache = imageCache,
                                                     onClick = { handleCardClick(channel) },
                                                     onToggleFavorite = { toggleFavorite(channel.id) }
@@ -1459,7 +1453,12 @@ private fun MediaShelfCard(
     LaunchedEffect(rawPosterUrl) {
         if (rawPosterUrl != null && !imageCache.containsKey(rawPosterUrl)) {
             val loaded = withContext(Dispatchers.IO) {
-                downloadImageBitmap(rawPosterUrl)
+                imageDownloadSemaphore.withPermit {
+                    downloadImageBitmap(rawPosterUrl)
+                }
+            }
+            if (imageCache.size > 250) {
+                imageCache.clear()
             }
             imageCache[rawPosterUrl] = loaded
         }
@@ -1637,16 +1636,16 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) 
             )
         }
 
-        root.put("channels", channelsToJsonArray(snapshot.channels.take(1500)))
+        root.put("channels", channelsToJsonArray(snapshot.channels.take(800)))
 
         val plArr = JSONArray()
-        snapshot.playlists.take(20).forEach { pl ->
+        snapshot.playlists.take(8).forEach { pl ->
             plArr.put(
                 JSONObject().apply {
                     put("id", pl.id)
                     put("title", pl.title)
                     put("sourceInfo", pl.sourceInfo)
-                    put("channels", channelsToJsonArray(pl.channels.take(500)))
+                    put("channels", channelsToJsonArray(pl.channels.take(200)))
                 }
             )
         }
@@ -1655,7 +1654,7 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) 
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_STATE_JSON, root.toString())
-            .apply()
+            .commit()
     }
 }
 
@@ -1681,10 +1680,10 @@ private fun channelsToJsonArray(list: List<ChannelEntry>): JSONArray {
 private fun downloadImageBitmap(imageUrl: String): ImageBitmap? {
     var currentUrl = imageUrl
     var redirects = 0
-    while (redirects < 4) {
+    while (redirects < 3) {
         val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 8000
-            readTimeout = 10000
+            connectTimeout = 5000
+            readTimeout = 7000
             requestMethod = "GET"
             instanceFollowRedirects = false
             setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0")
@@ -1699,9 +1698,9 @@ private fun downloadImageBitmap(imageUrl: String): ImageBitmap? {
             }
             if (code !in 200..299) return null
             val bytes = conn.inputStream.use { it.readBytes() }
-            if (bytes.isEmpty()) return null
+            if (bytes.isEmpty() || bytes.size > 3_500_000) return null
             val opts = BitmapFactory.Options().apply {
-                inSampleSize = 2
+                inSampleSize = 4
             }
             return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
         } finally {
