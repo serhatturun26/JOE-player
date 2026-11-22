@@ -149,7 +149,7 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v11"
+private const val PREFS_NAME = "joe_player_prefs_v12"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
@@ -255,6 +255,7 @@ private fun JoeApp() {
 
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var onlyFavoritesFilter by remember { mutableStateOf(false) }
     var selectedCategoryFilter by remember { mutableStateOf("Tümü") }
     var showCategoryMenu by remember { mutableStateOf(false) }
     var sortOrder by remember { mutableStateOf(SortOrder.DEFAULT) }
@@ -504,6 +505,7 @@ private fun JoeApp() {
         if (targetKind != null) {
             selectedMediaKind = targetKind
             selectedCategoryFilter = "Tümü"
+            onlyFavoritesFilter = false
         }
         if (openPlayerFirst != null) {
             activeChannel = openPlayerFirst
@@ -994,7 +996,11 @@ private fun JoeApp() {
                     allChannels.filter { it.kind == selectedMediaKind }
                 }
 
-                val kindRecentChannels = remember(recentWatches, allChannels, selectedMediaKind) {
+                val favoriteCountInKind = remember(kindChannels) {
+                    kindChannels.count { it.isFavorite }
+                }
+
+                val kindRecentChannels = remember(recentWatches, allChannels, selectedMediaKind, onlyFavoritesFilter) {
                     recentWatches
                         .filter { it.channel.kind == selectedMediaKind }
                         .map { recent ->
@@ -1002,6 +1008,7 @@ private fun JoeApp() {
                                 it.id == recent.channel.id && it.kind == recent.channel.kind
                             } ?: recent.channel
                         }
+                        .filter { !onlyFavoritesFilter || it.isFavorite }
                 }
 
                 val categories = remember(kindChannels, kindRecentChannels) {
@@ -1023,6 +1030,7 @@ private fun JoeApp() {
                     kindChannels,
                     kindRecentChannels,
                     searchQuery,
+                    onlyFavoritesFilter,
                     selectedCategoryFilter,
                     sortOrder
                 ) {
@@ -1030,7 +1038,9 @@ private fun JoeApp() {
                         kindRecentChannels
                     } else {
                         kindChannels.filter { ch ->
-                            selectedCategoryFilter == "Tümü" || ch.group == selectedCategoryFilter
+                            val matchesCat = selectedCategoryFilter == "Tümü" || ch.group == selectedCategoryFilter
+                            val matchesFav = !onlyFavoritesFilter || ch.isFavorite
+                            matchesCat && matchesFav
                         }
                     }
                     val base = sourcePool.filter { ch ->
@@ -1049,7 +1059,13 @@ private fun JoeApp() {
                     }
                 }
 
-                val groupedChannels = remember(filteredAndSorted, kindRecentChannels, selectedCategoryFilter, searchQuery) {
+                val groupedChannels = remember(
+                    filteredAndSorted,
+                    kindRecentChannels,
+                    selectedCategoryFilter,
+                    searchQuery,
+                    onlyFavoritesFilter
+                ) {
                     val baseGroups = filteredAndSorted.groupBy { it.group }
                     if (selectedCategoryFilter == "Tümü" && searchQuery.isBlank() && kindRecentChannels.isNotEmpty()) {
                         linkedMapOf(RECENT_CATEGORY_LABEL to kindRecentChannels).apply {
@@ -1059,6 +1075,8 @@ private fun JoeApp() {
                         baseGroups
                     }
                 }
+
+                val hasActiveSubFilter = onlyFavoritesFilter || selectedCategoryFilter != "Tümü"
 
                 Column(
                     modifier = Modifier
@@ -1070,32 +1088,64 @@ private fun JoeApp() {
                             .fillMaxWidth()
                             .background(Color.White)
                             .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        MediaKind.entries.forEach { kind ->
-                            val isSelected = selectedMediaKind == kind
-                            val count = allChannels.count { it.kind == kind }
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = {
-                                    selectedMediaKind = kind
-                                    selectedCategoryFilter = "Tümü"
-                                },
-                                label = {
-                                    Text(
-                                        text = "${kind.label} ($count)",
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        overflow = TextOverflow.Ellipsis,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                        LazyRow(
+                            modifier = Modifier.weight(1f),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(MediaKind.entries, key = { it.name }) { kind ->
+                                val isSelected = selectedMediaKind == kind
+                                val count = allChannels.count { it.kind == kind }
+                                FilterChip(
+                                    selected = isSelected,
+                                    onClick = {
+                                        selectedMediaKind = kind
+                                        selectedCategoryFilter = "Tümü"
+                                    },
+                                    label = {
+                                        Text(
+                                            text = "${kind.label} ($count)",
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = AccentRed,
+                                        selectedLabelColor = Color.White
                                     )
-                                },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = AccentRed,
-                                    selectedLabelColor = Color.White
                                 )
-                            )
+                            }
                         }
+
+                        FilterChip(
+                            selected = onlyFavoritesFilter,
+                            onClick = { onlyFavoritesFilter = !onlyFavoritesFilter },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (onlyFavoritesFilter) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = "Favoriler ($favoriteCountInKind)",
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (onlyFavoritesFilter) FontWeight.Bold else FontWeight.Medium
+                                )
+                            },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AccentRed,
+                                selectedLabelColor = Color.White,
+                                selectedLeadingIconColor = Color.White
+                            )
+                        )
                     }
 
                     Row(
@@ -1226,7 +1276,15 @@ private fun JoeApp() {
                         }
                     }
 
-                    if (selectedCategoryFilter != "Tümü") {
+                    if (hasActiveSubFilter) {
+                        val summaryLabel = buildString {
+                            if (onlyFavoritesFilter) append("Favoriler")
+                            if (selectedCategoryFilter != "Tümü") {
+                                if (isNotEmpty()) append(" • ")
+                                append("Kategori: $selectedCategoryFilter")
+                            }
+                            append(" (${filteredAndSorted.size})")
+                        }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1236,7 +1294,7 @@ private fun JoeApp() {
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "Kategori: $selectedCategoryFilter (${filteredAndSorted.size})",
+                                text = summaryLabel,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color(0xFF1A1A1A),
@@ -1245,7 +1303,10 @@ private fun JoeApp() {
                                 modifier = Modifier.weight(1f)
                             )
                             TextButton(
-                                onClick = { selectedCategoryFilter = "Tümü" },
+                                onClick = {
+                                    selectedCategoryFilter = "Tümü"
+                                    onlyFavoritesFilter = false
+                                },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                             ) {
                                 Text(
@@ -1313,13 +1374,17 @@ private fun JoeApp() {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "${selectedMediaKind.label} bölümünde içerik bulunamadı. Listelerim sekmesinden kaynak ekleyebilirsiniz.",
+                                text = if (onlyFavoritesFilter) {
+                                    "${selectedMediaKind.label} bölümünde henüz favori içerik yok. Karttaki kalp simgesine dokunarak ekleyebilirsin."
+                                } else {
+                                    "${selectedMediaKind.label} bölümünde içerik bulunamadı. Listelerim sekmesinden kaynak ekleyebilirsiniz."
+                                },
                                 color = Color.DarkGray,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier.padding(24.dp)
                             )
                         }
-                    } else if (selectedCategoryFilter != "Tümü") {
+                    } else if (selectedCategoryFilter != "Tümü" || onlyFavoritesFilter) {
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(3),
                             modifier = Modifier.fillMaxSize(),
