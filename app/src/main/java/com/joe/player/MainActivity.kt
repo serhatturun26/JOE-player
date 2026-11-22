@@ -16,6 +16,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -831,6 +834,7 @@ private fun JoeApp() {
                                     Text(
                                         text = "${kind.label} ($count)",
                                         maxLines = 1,
+                                        softWrap = false,
                                         overflow = TextOverflow.Ellipsis,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                                     )
@@ -849,7 +853,7 @@ private fun JoeApp() {
                             .background(Color.White)
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         IconButton(
                             onClick = {
@@ -876,14 +880,14 @@ private fun JoeApp() {
                                 shape = RoundedCornerShape(24.dp)
                             )
                         } else {
-                            Box {
+                            Box(modifier = Modifier.weight(1f, fill = false)) {
                                 Surface(
                                     onClick = { showCategoryMenu = true },
                                     shape = RoundedCornerShape(24.dp),
                                     color = ChipDarkBg
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
@@ -894,11 +898,16 @@ private fun JoeApp() {
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Text(
-                                            text = if (selectedCategoryFilter == "Tümü") "Kategori (${categories.size - 1})" else selectedCategoryFilter,
+                                            text = if (selectedCategoryFilter == "Tümü") {
+                                                "Kategori (${categories.size - 1})"
+                                            } else {
+                                                selectedCategoryFilter
+                                            },
                                             color = Color.White,
                                             fontWeight = FontWeight.Medium,
-                                            fontSize = 14.sp,
+                                            fontSize = 13.sp,
                                             maxLines = 1,
+                                            softWrap = false,
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
@@ -927,7 +936,7 @@ private fun JoeApp() {
                                     color = ChipDarkBg
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
@@ -941,7 +950,9 @@ private fun JoeApp() {
                                             text = "Düzenle",
                                             color = Color.White,
                                             fontWeight = FontWeight.Medium,
-                                            fontSize = 14.sp
+                                            fontSize = 13.sp,
+                                            maxLines = 1,
+                                            softWrap = false
                                         )
                                     }
                                 }
@@ -986,7 +997,13 @@ private fun JoeApp() {
                                 onClick = { selectedCategoryFilter = "Tümü" },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                             ) {
-                                Text("Tümünü Göster", color = AccentOrange, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = "Tümünü Göster",
+                                    color = AccentOrange,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    softWrap = false
+                                )
                             }
                         }
                     }
@@ -1035,7 +1052,7 @@ private fun JoeApp() {
                         }
                     }
 
-                    if (groupedChannels.isEmpty()) {
+                    if (filteredAndSorted.isEmpty()) {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
@@ -1046,6 +1063,29 @@ private fun JoeApp() {
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier.padding(24.dp)
                             )
+                        }
+                    } else if (selectedCategoryFilter != "Tümü") {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(3),
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(
+                                items = filteredAndSorted,
+                                key = { ch -> "${ch.kind.name}-${ch.id}" }
+                            ) { channel ->
+                                MediaShelfCard(
+                                    channel = channel,
+                                    isSelected = activeChannel?.id == channel.id && activeChannel?.kind == channel.kind,
+                                    onClick = { handleCardClick(channel) },
+                                    onToggleFavorite = { toggleFavorite(channel.id) },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(118.dp)
+                                )
+                            }
                         }
                     } else {
                         val categoryEntries = remember(groupedChannels) {
@@ -1091,7 +1131,8 @@ private fun JoeApp() {
                                             text = "${channelList.size} >",
                                             fontSize = 14.sp,
                                             fontWeight = FontWeight.SemiBold,
-                                            color = AccentOrange
+                                            color = AccentOrange,
+                                            softWrap = false
                                         )
                                     }
 
@@ -1107,7 +1148,10 @@ private fun JoeApp() {
                                                 channel = channel,
                                                 isSelected = activeChannel?.id == channel.id && activeChannel?.kind == channel.kind,
                                                 onClick = { handleCardClick(channel) },
-                                                onToggleFavorite = { toggleFavorite(channel.id) }
+                                                onToggleFavorite = { toggleFavorite(channel.id) },
+                                                modifier = Modifier
+                                                    .width(155.dp)
+                                                    .height(118.dp)
                                             )
                                         }
                                     }
@@ -1495,7 +1539,8 @@ private fun MediaShelfCard(
     channel: ChannelEntry,
     isSelected: Boolean,
     onClick: () -> Unit,
-    onToggleFavorite: () -> Unit
+    onToggleFavorite: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val shelfIcon = when (channel.kind) {
         MediaKind.LIVE -> Icons.Default.LiveTv
@@ -1515,9 +1560,7 @@ private fun MediaShelfCard(
             width = if (isSelected) 2.dp else 1.dp,
             color = if (isSelected) AccentOrange else AccentOrange.copy(alpha = 0.55f)
         ),
-        modifier = Modifier
-            .width(155.dp)
-            .height(118.dp)
+        modifier = modifier
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             IconButton(
@@ -1537,11 +1580,11 @@ private fun MediaShelfCard(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 10.dp, vertical = 10.dp),
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(4.dp))
 
                 Box(
                     modifier = Modifier
@@ -1589,12 +1632,12 @@ private fun MediaShelfCard(
                 Text(
                     text = channel.name,
                     color = Color.White,
-                    fontSize = 12.sp,
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
                     textAlign = TextAlign.Center,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    lineHeight = 14.sp
+                    lineHeight = 13.sp
                 )
             }
         }
