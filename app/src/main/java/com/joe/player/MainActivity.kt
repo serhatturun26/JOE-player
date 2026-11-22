@@ -1,5 +1,8 @@
 package com.joe.player
 
+import android.content.Context
+import android.content.pm.ActivityInfo
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -7,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -26,6 +30,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -48,6 +55,7 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 
 enum class MediaKind(val label: String) {
     LIVE("Canlı TV"),
@@ -67,6 +75,7 @@ data class ChannelEntry(
     val url: String,
     val group: String = "Diğer",
     val kind: MediaKind = MediaKind.LIVE,
+    val posterUrl: String? = null,
     val isFavorite: Boolean = false,
     val xtreamSeriesId: String? = null,
     val xtreamCreds: XtreamCredentials? = null
@@ -110,6 +119,8 @@ private val AccentOrange = Color(0xFFE66C2C)
 private val CardDarkBg = Color(0xFF2B2B2B)
 private val ChipDarkBg = Color(0xFF1F1F1F)
 private val LightPageBg = Color(0xFFF7F7F7)
+private const val PREFS_NAME = "joe_player_prefs"
+private const val KEY_STATE_JSON = "saved_state_json"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -132,28 +143,38 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun JoeApp() {
     val context = LocalContext.current
+    val activity = context as? ComponentActivity
     val scope = rememberCoroutineScope()
 
-    var currentRoute by remember { mutableStateOf(BottomRoute.PLAYLISTS) }
+    val savedSnapshot = remember { loadPersistentState(context) }
+
+    var currentRoute by remember { mutableStateOf(BottomRoute.HOME) }
     var selectedMediaKind by remember { mutableStateOf(MediaKind.LIVE) }
-    var playlists by remember { mutableStateOf<List<SavedPlaylist>>(emptyList()) }
+    var playlists by remember { mutableStateOf(savedSnapshot.playlists) }
 
     var allChannels by remember {
         mutableStateOf(
-            listOf(
-                ChannelEntry(
-                    id = "demo-live-1",
-                    name = "Test Yayın 1 | FHD",
-                    url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-                    group = "Demo Kanallar",
-                    kind = MediaKind.LIVE
+            if (savedSnapshot.channels.isNotEmpty()) {
+                savedSnapshot.channels
+            } else {
+                listOf(
+                    ChannelEntry(
+                        id = "demo-live-1",
+                        name = "Test Yayın 1 | FHD",
+                        url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+                        group = "Demo Kanallar",
+                        kind = MediaKind.LIVE
+                    )
                 )
-            )
+            }
         )
     }
 
     var activeChannel by remember { mutableStateOf<ChannelEntry?>(null) }
     var isPlayerFullScreen by remember { mutableStateOf(false) }
+
+    // Görsel önbelleği (URL -> ImageBitmap veya null başarısızsa)
+    val imageCache = remember { mutableStateMapOf<String, ImageBitmap?>() }
 
     // Xtream Dizi Bölüm Seçici Dialog durumları
     var selectedSeriesForEpisodes by remember { mutableStateOf<ChannelEntry?>(null) }
@@ -172,28 +193,62 @@ private fun JoeApp() {
     // Listelerim sekmesi durumları
     var importMode by remember { mutableStateOf(ImportMode.XTREAM) }
     var defaultImportKind by remember { mutableStateOf(MediaKind.LIVE) }
-    var listNameInput by remember { mutableStateOf("") }
+    var listNameInput by remember { mutableStateOf(savedSnapshot.lastListName) }
 
-    // Xtream alanları
-    var xtreamServerInput by remember { mutableStateOf("") }
-    var xtreamUserInput by remember { mutableStateOf("") }
-    var xtreamPassInput by remember { mutableStateOf("") }
+    var xtreamServerInput by remember { mutableStateOf(savedSnapshot.xtream?.serverUrl ?: "") }
+    var xtreamUserInput by remember { mutableStateOf(savedSnapshot.xtream?.username ?: "") }
+    var xtreamPassInput by remember { mutableStateOf(savedSnapshot.xtream?.password ?: "") }
     var showXtreamPassword by remember { mutableStateOf(false) }
 
-    // URL ve Tekli alanlar
     var playlistUrlInput by remember { mutableStateOf("") }
     var singleChannelName by remember { mutableStateOf("") }
     var singleStreamUrl by remember { mutableStateOf("") }
     var singleGroupName by remember { mutableStateOf("Genel") }
 
-    var autoPlayOnSelect by remember { mutableStateOf(true) }
+    var autoPlayOnSelect by remember { mutableStateOf(savedSnapshot.autoPlay) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+
+    // Kalıcı hafızaya kaydetme
+    LaunchedEffect(allChannels, playlists, xtreamServerInput, xtreamUserInput, xtreamPassInput, listNameInput, autoPlayOnSelect) {
+        val currentXtream = if (xtreamServerInput.isNotBlank() || xtreamUserInput.isNotBlank() || xtreamPassInput.isNotBlank()) {
+            XtreamCredentials(
+                serverUrl = xtreamServerInput.trim(),
+                username = xtreamUserInput.trim(),
+                password = xtreamPassInput.trim()
+            )
+        } else {
+            null
+        }
+        savePersistentState(
+            context = context,
+            snapshot = PersistentSnapshot(
+                channels = allChannels,
+                playlists = playlists,
+                xtream = currentXtream,
+                lastListName = listNameInput,
+                autoPlay = autoPlayOnSelect
+            )
+        )
+    }
+
+    // Tam ekranda serbest dönüş veya tam ekran çıkınca dikey moda dönüş
+    LaunchedEffect(isPlayerFullScreen) {
+        activity?.requestedOrientation = if (isPlayerFullScreen) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
 
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
 
     DisposableEffect(exoPlayer) {
-        onDispose { exoPlayer.release() }
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        onDispose {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            exoPlayer.release()
+        }
     }
 
     LaunchedEffect(activeChannel?.url, autoPlayOnSelect) {
@@ -261,6 +316,9 @@ private fun JoeApp() {
             }
         } else {
             activeChannel = item
+            if (item.kind == MediaKind.MOVIES) {
+                isPlayerFullScreen = true
+            }
         }
     }
 
@@ -274,7 +332,7 @@ private fun JoeApp() {
                 try {
                     val content = withContext(Dispatchers.IO) {
                         context.contentResolver.openInputStream(uri)?.use { stream ->
-                            BufferedReader(InputStreamReader(stream)).readText()
+                            BufferedReader(InputStreamReader(stream, StandardCharsets.UTF_8)).readText()
                         }.orEmpty()
                     }
                     val parsed = parsePlaylistText(
@@ -295,6 +353,7 @@ private fun JoeApp() {
         }
     }
 
+    // Tam ekran oynatıcı görünümü (yatay/dikey dönüşte içerik korunur)
     if (isPlayerFullScreen && activeChannel != null) {
         Box(
             modifier = Modifier
@@ -372,9 +431,11 @@ private fun JoeApp() {
                                                 name = "${seriesItem.name} - S${ep.season}E${ep.episodeNum}: ${ep.title}",
                                                 url = ep.streamUrl,
                                                 group = seriesItem.group,
-                                                kind = MediaKind.SERIES
+                                                kind = MediaKind.SERIES,
+                                                posterUrl = seriesItem.posterUrl
                                             )
                                             selectedSeriesForEpisodes = null
+                                            isPlayerFullScreen = true
                                         },
                                         shape = RoundedCornerShape(8.dp),
                                         color = Color(0xFFF2F2F2),
@@ -501,7 +562,6 @@ private fun JoeApp() {
                         .fillMaxSize()
                         .padding(innerPadding)
                 ) {
-                    // Üst Medya Modu Seçici: Canlı TV | Filmler | Diziler
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -534,7 +594,6 @@ private fun JoeApp() {
                         }
                     }
 
-                    // Üst Araç Çubuğu: Arama + Kategori + Düzenle
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -740,6 +799,7 @@ private fun JoeApp() {
                                                 MediaShelfCard(
                                                     channel = channel,
                                                     isSelected = activeChannel?.id == channel.id,
+                                                    imageCache = imageCache,
                                                     onClick = { handleCardClick(channel) },
                                                     onToggleFavorite = { toggleFavorite(channel.id) }
                                                 )
@@ -815,7 +875,6 @@ private fun JoeApp() {
                                     )
                                 }
 
-                                // Xtream kendi kategorilerini otomatik ayırır; diğer modlar için hedef bölüm seçici
                                 if (importMode != ImportMode.XTREAM) {
                                     Text(
                                         text = "Hedef Bölüm (Otomatik veya Seçili)",
@@ -898,7 +957,6 @@ private fun JoeApp() {
                                                             playlistTitle = title,
                                                             sourceInfo = creds.serverUrl
                                                         )
-                                                        listNameInput = ""
                                                         selectedMediaKind = MediaKind.LIVE
                                                         currentRoute = BottomRoute.HOME
                                                     } catch (e: Exception) {
@@ -1128,6 +1186,7 @@ private fun JoeApp() {
 private fun MediaShelfCard(
     channel: ChannelEntry,
     isSelected: Boolean,
+    imageCache: MutableMap<String, ImageBitmap?>,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit
 ) {
@@ -1136,6 +1195,17 @@ private fun MediaShelfCard(
         MediaKind.MOVIES -> Icons.Default.Movie
         MediaKind.SERIES -> Icons.Default.Tv
     }
+
+    val rawPosterUrl = channel.posterUrl?.trim()?.takeIf { it.isNotBlank() }
+    LaunchedEffect(rawPosterUrl) {
+        if (rawPosterUrl != null && !imageCache.containsKey(rawPosterUrl)) {
+            val loaded = withContext(Dispatchers.IO) {
+                downloadImageBitmap(rawPosterUrl)
+            }
+            imageCache[rawPosterUrl] = loaded
+        }
+    }
+    val cachedBitmap = if (rawPosterUrl != null) imageCache[rawPosterUrl] else null
 
     Surface(
         onClick = onClick,
@@ -1175,17 +1245,26 @@ private fun MediaShelfCard(
 
                 Box(
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(48.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(Color(0xFF1A1A1A)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = shelfIcon,
-                        contentDescription = null,
-                        tint = Color.LightGray,
-                        modifier = Modifier.size(24.dp)
-                    )
+                    if (cachedBitmap != null) {
+                        Image(
+                            bitmap = cachedBitmap,
+                            contentDescription = channel.name,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Icon(
+                            imageVector = shelfIcon,
+                            contentDescription = null,
+                            tint = Color.LightGray,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
                 }
 
                 Text(
@@ -1201,6 +1280,179 @@ private fun MediaShelfCard(
             }
         }
     }
+}
+
+private data class PersistentSnapshot(
+    val channels: List<ChannelEntry> = emptyList(),
+    val playlists: List<SavedPlaylist> = emptyList(),
+    val xtream: XtreamCredentials? = null,
+    val lastListName: String = "",
+    val autoPlay: Boolean = true
+)
+
+private fun loadPersistentState(context: Context): PersistentSnapshot {
+    return try {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_STATE_JSON, null) ?: return PersistentSnapshot()
+        val root = JSONObject(raw)
+
+        val xtreamObj = root.optJSONObject("xtream")
+        val xtream = if (xtreamObj != null) {
+            val server = xtreamObj.optString("serverUrl")
+            val user = xtreamObj.optString("username")
+            val pass = xtreamObj.optString("password")
+            if (server.isNotBlank() || user.isNotBlank() || pass.isNotBlank()) {
+                XtreamCredentials(server, user, pass)
+            } else {
+                null
+            }
+        } else {
+            null
+        }
+
+        val channels = parseChannelsArray(root.optJSONArray("channels") ?: JSONArray(), xtream)
+
+        val playlists = mutableListOf<SavedPlaylist>()
+        val plArr = root.optJSONArray("playlists") ?: JSONArray()
+        for (i in 0 until plArr.length()) {
+            val pObj = plArr.optJSONObject(i) ?: continue
+            playlists.add(
+                SavedPlaylist(
+                    id = pObj.optString("id", "pl-$i"),
+                    title = pObj.optString("title", "Liste"),
+                    sourceInfo = pObj.optString("sourceInfo", ""),
+                    channels = parseChannelsArray(pObj.optJSONArray("channels") ?: JSONArray(), xtream)
+                )
+            )
+        }
+
+        PersistentSnapshot(
+            channels = channels,
+            playlists = playlists,
+            xtream = xtream,
+            lastListName = root.optString("lastListName", ""),
+            autoPlay = root.optBoolean("autoPlay", true)
+        )
+    } catch (_: Exception) {
+        PersistentSnapshot()
+    }
+}
+
+private fun parseChannelsArray(arr: JSONArray, fallbackXtream: XtreamCredentials?): List<ChannelEntry> {
+    val out = mutableListOf<ChannelEntry>()
+    for (i in 0 until arr.length()) {
+        val obj = arr.optJSONObject(i) ?: continue
+        val kindName = obj.optString("kind", MediaKind.LIVE.name)
+        val kind = runCatching { MediaKind.valueOf(kindName) }.getOrDefault(MediaKind.LIVE)
+        val seriesId = obj.optString("xtreamSeriesId").takeIf { it.isNotBlank() }
+        val creds = if (seriesId != null) fallbackXtream else null
+        out.add(
+            ChannelEntry(
+                id = obj.optString("id", "ch-$i"),
+                name = obj.optString("name", "İçerik"),
+                url = obj.optString("url", ""),
+                group = obj.optString("group", "Diğer"),
+                kind = kind,
+                posterUrl = obj.optString("posterUrl").takeIf { it.isNotBlank() },
+                isFavorite = obj.optBoolean("isFavorite", false),
+                xtreamSeriesId = seriesId,
+                xtreamCreds = creds
+            )
+        )
+    }
+    return out
+}
+
+private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) {
+    try {
+        val root = JSONObject()
+        root.put("lastListName", snapshot.lastListName)
+        root.put("autoPlay", snapshot.autoPlay)
+
+        snapshot.xtream?.let { x ->
+            root.put(
+                "xtream",
+                JSONObject().apply {
+                    put("serverUrl", x.serverUrl)
+                    put("username", x.username)
+                    put("password", x.password)
+                }
+            )
+        }
+
+        root.put("channels", channelsToJsonArray(snapshot.channels.take(1500)))
+
+        val plArr = JSONArray()
+        snapshot.playlists.take(20).forEach { pl ->
+            plArr.put(
+                JSONObject().apply {
+                    put("id", pl.id)
+                    put("title", pl.title)
+                    put("sourceInfo", pl.sourceInfo)
+                    put("channels", channelsToJsonArray(pl.channels.take(500)))
+                }
+            )
+        }
+        root.put("playlists", plArr)
+
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_STATE_JSON, root.toString())
+            .apply()
+    } catch (_: Exception) {
+    }
+}
+
+private fun channelsToJsonArray(list: List<ChannelEntry>): JSONArray {
+    val arr = JSONArray()
+    list.forEach { ch ->
+        arr.put(
+            JSONObject().apply {
+                put("id", ch.id)
+                put("name", ch.name)
+                put("url", ch.url)
+                put("group", ch.group)
+                put("kind", ch.kind.name)
+                put("posterUrl", ch.posterUrl ?: "")
+                put("isFavorite", ch.isFavorite)
+                put("xtreamSeriesId", ch.xtreamSeriesId ?: "")
+            }
+        )
+    }
+    return arr
+}
+
+private fun downloadImageBitmap(imageUrl: String): ImageBitmap? {
+    var currentUrl = imageUrl
+    var redirects = 0
+    while (redirects < 4) {
+        val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 8000
+            readTimeout = 10000
+            requestMethod = "GET"
+            instanceFollowRedirects = false
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0")
+        }
+        try {
+            val code = conn.responseCode
+            if (code in 300..399) {
+                val loc = conn.getHeaderField("Location") ?: break
+                currentUrl = URL(URL(currentUrl), loc).toString()
+                redirects++
+                continue
+            }
+            if (code !in 200..299) return null
+            val bytes = conn.inputStream.use { it.readBytes() }
+            if (bytes.isEmpty()) return null
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = 2
+            }
+            return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
+        } finally {
+            conn.disconnect()
+        }
+    }
+    return null
 }
 
 private fun normalizeServerUrl(raw: String): String {
@@ -1221,8 +1473,8 @@ private fun buildPlayerApiUrl(creds: XtreamCredentials, action: String? = null, 
 }
 
 private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
-    // 1. Kimlik doğrulama kontrolü
-    val authJson = JSONObject(downloadText(buildPlayerApiUrl(creds)))
+    val authRaw = downloadText(buildPlayerApiUrl(creds))
+    val authJson = JSONObject(authRaw)
     val userInfo = authJson.optJSONObject("user_info")
     val authStatus = userInfo?.optInt("auth", 0) ?: 0
     if (authStatus == 0) {
@@ -1231,7 +1483,6 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
 
     val results = mutableListOf<ChannelEntry>()
 
-    // 2. Canlı TV Kategorileri ve Kanalları
     val liveCatMap = parseCategoryMap(safeDownload(buildPlayerApiUrl(creds, "get_live_categories")))
     val liveArray = JSONArray(safeDownload(buildPlayerApiUrl(creds, "get_live_streams"), "[]"))
     for (i in 0 until liveArray.length()) {
@@ -1240,6 +1491,7 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
         val name = obj.optString("name", "Canlı Kanal").trim()
         val catId = obj.optString("category_id")
         val group = liveCatMap[catId] ?: "Canlı TV"
+        val icon = obj.optString("stream_icon").takeIf { it.isNotBlank() }
         val streamUrl = "${creds.serverUrl}/live/${creds.username}/${creds.password}/$streamId.m3u8"
         results.add(
             ChannelEntry(
@@ -1247,12 +1499,12 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
                 name = name,
                 url = streamUrl,
                 group = group,
-                kind = MediaKind.LIVE
+                kind = MediaKind.LIVE,
+                posterUrl = icon
             )
         )
     }
 
-    // 3. Filmler (VOD) Kategorileri ve Akışları
     val vodCatMap = parseCategoryMap(safeDownload(buildPlayerApiUrl(creds, "get_vod_categories")))
     val vodArray = JSONArray(safeDownload(buildPlayerApiUrl(creds, "get_vod_streams"), "[]"))
     for (i in 0 until vodArray.length()) {
@@ -1262,6 +1514,9 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
         val catId = obj.optString("category_id")
         val ext = obj.optString("container_extension", "mp4").ifBlank { "mp4" }
         val group = vodCatMap[catId] ?: "Filmler"
+        val poster = obj.optString("stream_icon")
+            .ifBlank { obj.optString("movie_image") }
+            .takeIf { it.isNotBlank() }
         val movieUrl = "${creds.serverUrl}/movie/${creds.username}/${creds.password}/$streamId.$ext"
         results.add(
             ChannelEntry(
@@ -1269,12 +1524,12 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
                 name = name,
                 url = movieUrl,
                 group = group,
-                kind = MediaKind.MOVIES
+                kind = MediaKind.MOVIES,
+                posterUrl = poster
             )
         )
     }
 
-    // 4. Diziler Kategorileri ve Dizi Listesi
     val seriesCatMap = parseCategoryMap(safeDownload(buildPlayerApiUrl(creds, "get_series_categories")))
     val seriesArray = JSONArray(safeDownload(buildPlayerApiUrl(creds, "get_series"), "[]"))
     for (i in 0 until seriesArray.length()) {
@@ -1283,6 +1538,9 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
         val name = obj.optString("name", "Dizi").trim()
         val catId = obj.optString("category_id")
         val group = seriesCatMap[catId] ?: "Diziler"
+        val cover = obj.optString("cover")
+            .ifBlank { obj.optString("stream_icon") }
+            .takeIf { it.isNotBlank() }
         results.add(
             ChannelEntry(
                 id = "xt-series-$seriesId",
@@ -1290,6 +1548,7 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
                 url = "",
                 group = group,
                 kind = MediaKind.SERIES,
+                posterUrl = cover,
                 xtreamSeriesId = seriesId,
                 xtreamCreds = creds
             )
@@ -1359,17 +1618,36 @@ private fun safeDownload(url: String, fallback: String = "[]"): String {
 }
 
 private fun downloadText(urlString: String): String {
-    val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 15000
-        readTimeout = 20000
-        requestMethod = "GET"
-        setRequestProperty("User-Agent", "JOE-Player/1.0")
+    var currentUrl = urlString
+    var redirects = 0
+    while (redirects < 5) {
+        val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15000
+            readTimeout = 20000
+            requestMethod = "GET"
+            instanceFollowRedirects = false
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0")
+            setRequestProperty("Accept", "application/json, text/plain, */*")
+        }
+        try {
+            val code = conn.responseCode
+            if (code in 300..399) {
+                val location = conn.getHeaderField("Location") ?: break
+                currentUrl = URL(URL(currentUrl), location).toString()
+                redirects++
+                continue
+            }
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) {
+                throw IllegalStateException("HTTP $code yanıtı alındı")
+            }
+            return body
+        } finally {
+            conn.disconnect()
+        }
     }
-    return try {
-        conn.inputStream.bufferedReader().use { it.readText() }
-    } finally {
-        conn.disconnect()
-    }
+    throw IllegalStateException("Çok fazla yönlendirme (redirect) yapıldı")
 }
 
 private fun detectMediaKind(group: String, title: String, fallback: MediaKind): MediaKind {
@@ -1394,11 +1672,14 @@ private fun parsePlaylistText(
     val items = mutableListOf<ChannelEntry>()
     var nextTitle: String? = null
     var nextGroup = defaultGroup
+    var nextLogo: String? = null
 
     for (line in lines) {
         if (line.startsWith("#EXTINF:", ignoreCase = true)) {
             val groupRegex = Regex("""group-title="([^"]*)"""", RegexOption.IGNORE_CASE).find(line)
             nextGroup = groupRegex?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() } ?: defaultGroup
+            val logoRegex = Regex("""tvg-logo="([^"]*)"""", RegexOption.IGNORE_CASE).find(line)
+            nextLogo = logoRegex?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
             val commaIdx = line.lastIndexOf(',')
             nextTitle = if (commaIdx != -1 && commaIdx + 1 < line.length) {
                 line.substring(commaIdx + 1).trim()
@@ -1418,11 +1699,13 @@ private fun parsePlaylistText(
                     name = resolvedName,
                     url = line,
                     group = nextGroup,
-                    kind = resolvedKind
+                    kind = resolvedKind,
+                    posterUrl = nextLogo
                 )
             )
             nextTitle = null
             nextGroup = defaultGroup
+            nextLogo = null
         }
     }
     return items
