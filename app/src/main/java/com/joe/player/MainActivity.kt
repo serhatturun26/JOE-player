@@ -64,6 +64,8 @@ import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 enum class MediaKind(val label: String) {
     LIVE("Canlı TV"),
@@ -168,10 +170,13 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v17"
+private const val PREFS_NAME = "joe_player_prefs_v18"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
+
+private val posterExecutor = Executors.newFixedThreadPool(3)
+private val activePosterJobs = AtomicInteger(0)
 
 private fun formatDurationBadge(positionMs: Long): String? {
     if (positionMs < 5_000L) return null
@@ -368,7 +373,7 @@ private fun JoeApp() {
         }
     }
 
-    fun recordRecentWatch(channel: ChannelEntry, positionMs: Long = 0L) {
+    fun recordRecentWatch(channel: ChannelEntry, positionMs: Long = 0L, persistDisk: Boolean = false) {
         if (channel.url.isBlank()) return
         val key = "${channel.kind.name}-${channel.id}-${channel.url}"
         val prevPosition = recentWatches.firstOrNull {
@@ -386,7 +391,9 @@ private fun JoeApp() {
         }
         val capped = updated.take(30)
         recentWatches = capped
-        persistNow(recents = capped)
+        if (persistDisk) {
+            persistNow(recents = capped)
+        }
     }
 
     fun retryCurrentPlayback() {
@@ -554,11 +561,6 @@ private fun JoeApp() {
                 } else if (exoPlayer.playbackState == Player.STATE_READY) {
                     playbackStatusLabel = "Duraklatıldı"
                 }
-                val ch = activeChannel
-                if (ch != null && ch.url.isNotBlank()) {
-                    val pos = runCatching { exoPlayer.currentPosition.coerceAtLeast(0L) }.getOrDefault(0L)
-                    recordRecentWatch(ch, pos)
-                }
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
@@ -572,7 +574,7 @@ private fun JoeApp() {
             val ch = activeChannel
             if (ch != null && ch.url.isNotBlank()) {
                 val pos = runCatching { exoPlayer.currentPosition.coerceAtLeast(0L) }.getOrDefault(0L)
-                recordRecentWatch(ch, pos)
+                recordRecentWatch(ch, pos, persistDisk = true)
             }
             exoPlayer.removeListener(listener)
             applyKeepScreenOn(activity, false)
@@ -594,7 +596,7 @@ private fun JoeApp() {
                         it.channel.id == current.id &&
                         it.channel.url == current.url
                 }?.lastPositionMs ?: 0L
-                recordRecentWatch(current, savedPos)
+                recordRecentWatch(current, savedPos, persistDisk = false)
                 exoPlayer.setMediaItem(MediaItem.fromUri(target))
                 if (current.kind != MediaKind.LIVE && savedPos > 2_000L) {
                     exoPlayer.seekTo(savedPos)
@@ -2909,18 +2911,24 @@ private fun MediaShelfCard(
                             update = { iv ->
                                 iv.setImageDrawable(null)
                                 iv.tag = posterUrl
-                                iv.post {
-                                    if (iv.tag != posterUrl) return@post
-                                    Thread {
-                                        val bmp = runCatching { downloadBitmapSafe(posterUrl) }.getOrNull()
-                                        if (bmp != null) {
-                                            iv.post {
-                                                if (iv.tag == posterUrl) {
-                                                    iv.setImageBitmap(bmp)
+                                if (activePosterJobs.get() < 6) {
+                                    activePosterJobs.incrementAndGet()
+                                    posterExecutor.execute {
+                                        try {
+                                            if (iv.tag == posterUrl) {
+                                                val bmp = runCatching { downloadBitmapSafe(posterUrl) }.getOrNull()
+                                                if (bmp != null) {
+                                                    iv.post {
+                                                        if (iv.tag == posterUrl) {
+                                                            iv.setImageBitmap(bmp)
+                                                        }
+                                                    }
                                                 }
                                             }
+                                        } finally {
+                                            activePosterJobs.decrementAndGet()
                                         }
-                                    }.start()
+                                    }
                                 }
                             },
                             modifier = Modifier.fillMaxSize()
@@ -2948,8 +2956,8 @@ private fun downloadBitmapSafe(imageUrl: String): android.graphics.Bitmap? {
     var redirects = 0
     while (redirects < 3) {
         val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 3500
-            readTimeout = 4500
+            connectTimeout = 3000
+            readTimeout = 4000
             requestMethod = "GET"
             instanceFollowRedirects = false
             setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
@@ -2964,7 +2972,7 @@ private fun downloadBitmapSafe(imageUrl: String): android.graphics.Bitmap? {
             }
             if (code !in 200..299) return null
             val bytes = conn.inputStream.use { it.readBytes() }
-            if (bytes.isEmpty() || bytes.size > 2_000_000) return null
+            if (bytes.isEmpty() || bytes.size > 1_500_000) return null
             val opts = BitmapFactory.Options().apply {
                 inSampleSize = 4
             }
