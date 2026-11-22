@@ -2,7 +2,6 @@ package com.joe.player
 
 import android.content.Context
 import android.content.pm.ActivityInfo
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -10,7 +9,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -30,9 +28,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -51,8 +46,6 @@ import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -125,11 +118,8 @@ private val AccentOrange = Color(0xFFE66C2C)
 private val CardDarkBg = Color(0xFF2B2B2B)
 private val ChipDarkBg = Color(0xFF1F1F1F)
 private val LightPageBg = Color(0xFFF7F7F7)
-private const val PREFS_NAME = "joe_player_prefs_v3"
+private const val PREFS_NAME = "joe_player_prefs_v4"
 private const val KEY_STATE_JSON = "saved_state_json"
-
-// Aynı anda en fazla 4 görsel indirerek bellek/ağ şişmesini önler
-private val imageDownloadSemaphore = Semaphore(4)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -214,8 +204,6 @@ private fun JoeApp() {
     var fillScreenAspect by remember { mutableStateOf(true) }
     var overlayTriggerKey by remember { mutableIntStateOf(0) }
 
-    val imageCache = remember { mutableStateMapOf<String, ImageBitmap?>() }
-
     var selectedSeriesForEpisodes by remember { mutableStateOf<ChannelEntry?>(null) }
     var seriesEpisodes by remember { mutableStateOf<List<SeriesEpisodeItem>>(emptyList()) }
     var isFetchingEpisodes by remember { mutableStateOf(false) }
@@ -248,9 +236,11 @@ private fun JoeApp() {
 
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
 
-    // Kaydetme işlemini arka planda ve kısa gecikmeli (debounce) yaparak UI'yı kilitlemez
-    LaunchedEffect(allChannels, playlists, xtreamServerInput, xtreamUserInput, xtreamPassInput, listNameInput, autoPlayOnSelect) {
-        delay(600L)
+    fun persistNow(
+        channels: List<ChannelEntry> = allChannels,
+        lists: List<SavedPlaylist> = playlists,
+        autoPlay: Boolean = autoPlayOnSelect
+    ) {
         val currentXtream = if (xtreamServerInput.isNotBlank() || xtreamUserInput.isNotBlank() || xtreamPassInput.isNotBlank()) {
             XtreamCredentials(
                 serverUrl = xtreamServerInput.trim(),
@@ -260,15 +250,15 @@ private fun JoeApp() {
         } else {
             null
         }
-        val snapshotToSave = PersistentSnapshot(
-            channels = allChannels,
-            playlists = playlists,
+        val snapshot = PersistentSnapshot(
+            channels = channels,
+            playlists = lists,
             xtream = currentXtream,
             lastListName = listNameInput,
-            autoPlay = autoPlayOnSelect
+            autoPlay = autoPlay
         )
-        withContext(Dispatchers.IO) {
-            savePersistentState(context = context, snapshot = snapshotToSave)
+        scope.launch(Dispatchers.IO) {
+            savePersistentState(context = context, snapshot = snapshot)
         }
     }
 
@@ -319,9 +309,11 @@ private fun JoeApp() {
     }
 
     fun toggleFavorite(channelId: String) {
-        allChannels = allChannels.map {
+        val updated = allChannels.map {
             if (it.id == channelId) it.copy(isFavorite = !it.isFavorite) else it
         }
+        allChannels = updated
+        persistNow(channels = updated)
     }
 
     fun addImportedChannels(
@@ -335,19 +327,23 @@ private fun JoeApp() {
         }
         val existingKeys = allChannels.map { "${it.kind.name}-${it.id}-${it.url}" }.toSet()
         val uniqueChannels = newChannels.filter { "${it.kind.name}-${it.id}-${it.url}" !in existingKeys }
-        allChannels = uniqueChannels + allChannels
+        val mergedChannels = uniqueChannels + allChannels
+        allChannels = mergedChannels
 
         val newPlaylist = SavedPlaylist(
             id = "pl-${System.currentTimeMillis()}-${playlists.size}",
             title = playlistTitle.ifBlank { "Liste ${playlists.size + 1}" },
             sourceInfo = sourceInfo,
-            channels = newChannels.take(300)
+            channels = newChannels.take(100)
         )
-        playlists = listOf(newPlaylist) + playlists.take(10)
+        val mergedPlaylists = listOf(newPlaylist) + playlists.take(6)
+        playlists = mergedPlaylists
+
         val liveCount = newChannels.count { it.kind == MediaKind.LIVE }
         val movieCount = newChannels.count { it.kind == MediaKind.MOVIES }
         val seriesCount = newChannels.count { it.kind == MediaKind.SERIES }
         statusText = "Yüklendi: $liveCount Canlı TV, $movieCount Film, $seriesCount Dizi"
+        persistNow(channels = mergedChannels, lists = mergedPlaylists)
     }
 
     fun handleCardClick(item: ChannelEntry) {
@@ -413,7 +409,8 @@ private fun JoeApp() {
         val currentCh = activeChannel!!
         val sameCategoryChannels = remember(allChannels, currentCh.kind, currentCh.group) {
             val sameGroup = allChannels.filter { it.kind == currentCh.kind && it.group == currentCh.group }
-            if (sameGroup.isNotEmpty()) sameGroup else allChannels.filter { it.kind == currentCh.kind }
+            val pool = if (sameGroup.isNotEmpty()) sameGroup else allChannels.filter { it.kind == currentCh.kind }
+            pool.take(100)
         }
 
         Box(
@@ -562,7 +559,7 @@ private fun JoeApp() {
                     ) {
                         items(
                             items = sameCategoryChannels,
-                            key = { "${it.kind.name}-${it.id}" }
+                            key = { idx -> "${currentCh.kind.name}-${idx.id}" }
                         ) { ch ->
                             val isCurrent = ch.id == currentCh.id && ch.kind == currentCh.kind
 
@@ -1022,41 +1019,45 @@ private fun JoeApp() {
                             )
                         }
                     } else {
+                        val categoryEntries = remember(groupedChannels) {
+                            groupedChannels.entries.toList()
+                        }
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(vertical = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(20.dp)
                         ) {
-                            groupedChannels.forEach { (categoryName, channelList) ->
-                                item(key = "${selectedMediaKind.name}-$categoryName") {
-                                    Column(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                                    ) {
-                                        Text(
-                                            text = categoryName,
-                                            fontSize = 20.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFF1A1A1A),
-                                            modifier = Modifier.padding(horizontal = 16.dp)
-                                        )
+                            items(
+                                items = categoryEntries,
+                                key = { entry -> "${selectedMediaKind.name}-${entry.key}" }
+                            ) { (categoryName, channelList) ->
+                                val visibleList = remember(channelList) { channelList.take(250) }
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Text(
+                                        text = categoryName,
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF1A1A1A),
+                                        modifier = Modifier.padding(horizontal = 16.dp)
+                                    )
 
-                                        LazyRow(
-                                            contentPadding = PaddingValues(horizontal = 16.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            items(
-                                                items = channelList,
-                                                key = { "${it.kind.name}-${it.id}" }
-                                            ) { channel ->
-                                                MediaShelfCard(
-                                                    channel = channel,
-                                                    isSelected = activeChannel?.id == channel.id && activeChannel?.kind == channel.kind,
-                                                    imageCache = imageCache,
-                                                    onClick = { handleCardClick(channel) },
-                                                    onToggleFavorite = { toggleFavorite(channel.id) }
-                                                )
-                                            }
+                                    LazyRow(
+                                        contentPadding = PaddingValues(horizontal = 16.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        items(
+                                            items = visibleList,
+                                            key = { ch -> "${ch.kind.name}-${ch.id}" }
+                                        ) { channel ->
+                                            MediaShelfCard(
+                                                channel = channel,
+                                                isSelected = activeChannel?.id == channel.id && activeChannel?.kind == channel.kind,
+                                                onClick = { handleCardClick(channel) },
+                                                onToggleFavorite = { toggleFavorite(channel.id) }
+                                            )
                                         }
                                     }
                                 }
@@ -1425,7 +1426,10 @@ private fun JoeApp() {
                             Text("İçerik seçilince otomatik oynat")
                             Switch(
                                 checked = autoPlayOnSelect,
-                                onCheckedChange = { autoPlayOnSelect = it }
+                                onCheckedChange = {
+                                    autoPlayOnSelect = it
+                                    persistNow(autoPlay = it)
+                                }
                             )
                         }
                     }
@@ -1439,7 +1443,6 @@ private fun JoeApp() {
 private fun MediaShelfCard(
     channel: ChannelEntry,
     isSelected: Boolean,
-    imageCache: MutableMap<String, ImageBitmap?>,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit
 ) {
@@ -1448,22 +1451,6 @@ private fun MediaShelfCard(
         MediaKind.MOVIES -> Icons.Default.Movie
         MediaKind.SERIES -> Icons.Default.Tv
     }
-
-    val rawPosterUrl = channel.posterUrl?.trim()?.takeIf { it.isNotBlank() }
-    LaunchedEffect(rawPosterUrl) {
-        if (rawPosterUrl != null && !imageCache.containsKey(rawPosterUrl)) {
-            val loaded = withContext(Dispatchers.IO) {
-                imageDownloadSemaphore.withPermit {
-                    downloadImageBitmap(rawPosterUrl)
-                }
-            }
-            if (imageCache.size > 250) {
-                imageCache.clear()
-            }
-            imageCache[rawPosterUrl] = loaded
-        }
-    }
-    val cachedBitmap = if (rawPosterUrl != null) imageCache[rawPosterUrl] else null
 
     Surface(
         onClick = onClick,
@@ -1503,26 +1490,17 @@ private fun MediaShelfCard(
 
                 Box(
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(Color(0xFF1A1A1A)),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (cachedBitmap != null) {
-                        Image(
-                            bitmap = cachedBitmap,
-                            contentDescription = channel.name,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Icon(
-                            imageVector = shelfIcon,
-                            contentDescription = null,
-                            tint = Color.LightGray,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
+                    Icon(
+                        imageVector = shelfIcon,
+                        contentDescription = null,
+                        tint = if (isSelected) AccentOrange else Color.LightGray,
+                        modifier = Modifier.size(22.dp)
+                    )
                 }
 
                 Text(
@@ -1636,16 +1614,16 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) 
             )
         }
 
-        root.put("channels", channelsToJsonArray(snapshot.channels.take(800)))
+        root.put("channels", channelsToJsonArray(snapshot.channels.take(600)))
 
         val plArr = JSONArray()
-        snapshot.playlists.take(8).forEach { pl ->
+        snapshot.playlists.take(6).forEach { pl ->
             plArr.put(
                 JSONObject().apply {
                     put("id", pl.id)
                     put("title", pl.title)
                     put("sourceInfo", pl.sourceInfo)
-                    put("channels", channelsToJsonArray(pl.channels.take(200)))
+                    put("channels", channelsToJsonArray(pl.channels.take(150)))
                 }
             )
         }
@@ -1675,39 +1653,6 @@ private fun channelsToJsonArray(list: List<ChannelEntry>): JSONArray {
         )
     }
     return arr
-}
-
-private fun downloadImageBitmap(imageUrl: String): ImageBitmap? {
-    var currentUrl = imageUrl
-    var redirects = 0
-    while (redirects < 3) {
-        val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 5000
-            readTimeout = 7000
-            requestMethod = "GET"
-            instanceFollowRedirects = false
-            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0")
-        }
-        try {
-            val code = conn.responseCode
-            if (code in 300..399) {
-                val loc = conn.getHeaderField("Location") ?: break
-                currentUrl = URL(URL(currentUrl), loc).toString()
-                redirects++
-                continue
-            }
-            if (code !in 200..299) return null
-            val bytes = conn.inputStream.use { it.readBytes() }
-            if (bytes.isEmpty() || bytes.size > 3_500_000) return null
-            val opts = BitmapFactory.Options().apply {
-                inSampleSize = 4
-            }
-            return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
-        } finally {
-            conn.disconnect()
-        }
-    }
-    return null
 }
 
 private fun normalizeServerUrl(raw: String): String {
@@ -1750,7 +1695,7 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
         val streamUrl = "${creds.serverUrl}/live/${creds.username}/${creds.password}/$streamId.m3u8"
         results.add(
             ChannelEntry(
-                id = "xt-live-$streamId",
+                id = "xt-live-$streamId-$i",
                 name = name,
                 url = streamUrl,
                 group = group,
@@ -1775,7 +1720,7 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
         val movieUrl = "${creds.serverUrl}/movie/${creds.username}/${creds.password}/$streamId.$ext"
         results.add(
             ChannelEntry(
-                id = "xt-vod-$streamId",
+                id = "xt-vod-$streamId-$i",
                 name = name,
                 url = movieUrl,
                 group = group,
@@ -1798,7 +1743,7 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
             .takeIf { it.isNotBlank() }
         results.add(
             ChannelEntry(
-                id = "xt-series-$seriesId",
+                id = "xt-series-$seriesId-$i",
                 name = name,
                 url = "",
                 group = group,
