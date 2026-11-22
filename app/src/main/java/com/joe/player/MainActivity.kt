@@ -173,7 +173,7 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v21"
+private const val PREFS_NAME = "joe_player_prefs_v22"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
@@ -1045,11 +1045,11 @@ private fun JoeApp() {
                     }
                 }
 
-                // Sol "X" noktası: Önceki / Sonraki Kanal düğmeleri
+                // Sol taraf: Önceki / Sonraki Kanal düğmeleri (biraz yukarı kaydırıldı)
                 Column(
                     modifier = Modifier
                         .align(Alignment.CenterStart)
-                        .padding(start = 16.dp),
+                        .padding(start = 16.dp, bottom = 76.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     IconButton(
@@ -1086,7 +1086,7 @@ private fun JoeApp() {
                     }
                 }
 
-                // Sağ "X" noktası: Ekran Sığdırma ve Oynat/Duraklat düğmeleri
+                // Sağ taraf: Ekran Sığdırma ve Oynat/Duraklat düğmeleri
                 Column(
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
