@@ -137,11 +137,11 @@ private enum class SortOrder(val label: String) {
     FAVORITES_FIRST("Önce Favoriler")
 }
 
-private val AccentOrange = Color(0xFFE66C2C)
-private val CardDarkBg = Color(0xFF2B2B2B)
-private val ChipDarkBg = Color(0xFF1F1F1F)
-private val LightPageBg = Color(0xFFF7F7F7)
-private const val PREFS_NAME = "joe_player_prefs_v8"
+private val AccentRed = Color(0xFFE50914)
+private val CardDarkBg = Color(0xFF242020)
+private val ChipDarkBg = Color(0xFF181212)
+private val LightPageBg = Color(0xFFF8F6F6)
+private const val PREFS_NAME = "joe_player_prefs_v9"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 
@@ -151,7 +151,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(
                 colorScheme = lightColorScheme(
-                    primary = AccentOrange,
+                    primary = AccentRed,
                     background = LightPageBg,
                     surface = Color.White
                 )
@@ -589,7 +589,7 @@ private fun JoeApp() {
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Surface(
-                                    color = AccentOrange,
+                                    color = AccentRed,
                                     shape = RoundedCornerShape(4.dp)
                                 ) {
                                     Text(
@@ -640,7 +640,7 @@ private fun JoeApp() {
                             },
                             modifier = Modifier
                                 .size(38.dp)
-                                .background(AccentOrange, CircleShape)
+                                .background(AccentRed, CircleShape)
                         ) {
                             Icon(
                                 imageVector = if (exoPlayer.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
@@ -703,10 +703,10 @@ private fun JoeApp() {
                                     }
                                 },
                                 shape = RoundedCornerShape(10.dp),
-                                color = if (isCurrent) AccentOrange.copy(alpha = 0.25f) else CardDarkBg,
+                                color = if (isCurrent) AccentRed.copy(alpha = 0.25f) else CardDarkBg,
                                 border = BorderStroke(
                                     width = if (isCurrent) 2.5.dp else 1.dp,
-                                    color = if (isCurrent) AccentOrange else Color.White.copy(alpha = 0.2f)
+                                    color = if (isCurrent) AccentRed else Color.White.copy(alpha = 0.2f)
                                 ),
                                 modifier = Modifier
                                     .width(150.dp)
@@ -729,7 +729,7 @@ private fun JoeApp() {
                                         Icon(
                                             imageVector = Icons.Default.LiveTv,
                                             contentDescription = null,
-                                            tint = if (isCurrent) AccentOrange else Color.LightGray,
+                                            tint = if (isCurrent) AccentRed else Color.LightGray,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }
@@ -738,7 +738,7 @@ private fun JoeApp() {
                                         if (isCurrent) {
                                             Text(
                                                 text = "ŞU ANKİ KANAL",
-                                                color = AccentOrange,
+                                                color = AccentRed,
                                                 fontSize = 9.sp,
                                                 fontWeight = FontWeight.ExtraBold
                                             )
@@ -788,7 +788,7 @@ private fun JoeApp() {
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                CircularProgressIndicator(color = AccentOrange)
+                                CircularProgressIndicator(color = AccentRed)
                                 Text("Sezon ve bölümler yükleniyor...")
                             }
                         }
@@ -824,7 +824,7 @@ private fun JoeApp() {
                                             Icon(
                                                 imageVector = Icons.Default.PlayArrow,
                                                 contentDescription = null,
-                                                tint = AccentOrange
+                                                tint = AccentRed
                                             )
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
@@ -843,7 +843,7 @@ private fun JoeApp() {
             },
             confirmButton = {
                 TextButton(onClick = { selectedSeriesForEpisodes = null }) {
-                    Text("Kapat", color = AccentOrange)
+                    Text("Kapat", color = AccentRed)
                 }
             }
         )
@@ -853,7 +853,7 @@ private fun JoeApp() {
         containerColor = LightPageBg,
         bottomBar = {
             NavigationBar(
-                containerColor = Color(0xFF1A1A1A),
+                containerColor = Color(0xFF181212),
                 contentColor = Color.White
             ) {
                 NavigationBarItem(
@@ -862,9 +862,9 @@ private fun JoeApp() {
                     icon = { Icon(Icons.Default.LiveTv, contentDescription = null) },
                     label = { Text("Ana Sayfa") },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = AccentOrange,
-                        selectedTextColor = AccentOrange,
-                        indicatorColor = Color(0xFF2B2B2B),
+                        selectedIconColor = AccentRed,
+                        selectedTextColor = AccentRed,
+                        indicatorColor = CardDarkBg,
                         unselectedIconColor = Color.LightGray,
                         unselectedTextColor = Color.LightGray
                     )
@@ -875,9 +875,9 @@ private fun JoeApp() {
                     icon = { Icon(Icons.Default.QueueMusic, contentDescription = null) },
                     label = { Text("Listelerim") },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = AccentOrange,
-                        selectedTextColor = AccentOrange,
-                        indicatorColor = Color(0xFF2B2B2B),
+                        selectedIconColor = AccentRed,
+                        selectedTextColor = AccentRed,
+                        indicatorColor = CardDarkBg,
                         unselectedIconColor = Color.LightGray,
                         unselectedTextColor = Color.LightGray
                     )
@@ -888,9 +888,9 @@ private fun JoeApp() {
                     icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                     label = { Text("Ayarlar") },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = AccentOrange,
-                        selectedTextColor = AccentOrange,
-                        indicatorColor = Color(0xFF2B2B2B),
+                        selectedIconColor = AccentRed,
+                        selectedTextColor = AccentRed,
+                        indicatorColor = CardDarkBg,
                         unselectedIconColor = Color.LightGray,
                         unselectedTextColor = Color.LightGray
                     )
@@ -964,7 +964,7 @@ private fun JoeApp() {
                                     )
                                 },
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = AccentOrange,
+                                    selectedContainerColor = AccentRed,
                                     selectedLabelColor = Color.White
                                 )
                             )
@@ -1103,7 +1103,7 @@ private fun JoeApp() {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(AccentOrange.copy(alpha = 0.12f))
+                                .background(AccentRed.copy(alpha = 0.12f))
                                 .padding(horizontal = 16.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -1123,7 +1123,7 @@ private fun JoeApp() {
                             ) {
                                 Text(
                                     text = "Tümünü Göster",
-                                    color = AccentOrange,
+                                    color = AccentRed,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     softWrap = false
@@ -1255,7 +1255,7 @@ private fun JoeApp() {
                                             text = "${channelList.size} >",
                                             fontSize = 14.sp,
                                             fontWeight = FontWeight.SemiBold,
-                                            color = AccentOrange,
+                                            color = AccentRed,
                                             softWrap = false
                                         )
                                     }
@@ -1318,7 +1318,7 @@ private fun JoeApp() {
                                         onClick = { defaultImportKind = kind },
                                         label = { Text(kind.label, maxLines = 1, fontSize = 12.sp) },
                                         colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = AccentOrange,
+                                            selectedContainerColor = AccentRed,
                                             selectedLabelColor = Color.White
                                         )
                                     )
@@ -1331,7 +1331,7 @@ private fun JoeApp() {
                         item {
                             LinearProgressIndicator(
                                 modifier = Modifier.fillMaxWidth(),
-                                color = AccentOrange
+                                color = AccentRed
                             )
                         }
                     }
@@ -1339,7 +1339,7 @@ private fun JoeApp() {
                     if (statusText != null) {
                         item {
                             Surface(
-                                color = AccentOrange.copy(alpha = 0.12f),
+                                color = AccentRed.copy(alpha = 0.12f),
                                 shape = RoundedCornerShape(8.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
@@ -1347,7 +1347,7 @@ private fun JoeApp() {
                                     text = statusText!!,
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.Medium,
-                                    color = AccentOrange,
+                                    color = AccentRed,
                                     modifier = Modifier.padding(12.dp)
                                 )
                             }
@@ -1444,7 +1444,7 @@ private fun JoeApp() {
                                                             )
                                                         },
                                                         enabled = !isLoading && streamUrlInput.isNotBlank(),
-                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
                                                         modifier = Modifier.weight(1f)
                                                     ) {
                                                         Icon(Icons.Default.PlayArrow, contentDescription = null)
@@ -1512,7 +1512,7 @@ private fun JoeApp() {
                                                             }
                                                         },
                                                         enabled = !isLoading && m3uUrlInput.isNotBlank(),
-                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
                                                         modifier = Modifier.weight(1f)
                                                     ) {
                                                         Text("URL Yükle")
@@ -1576,7 +1576,7 @@ private fun JoeApp() {
                                                             }
                                                         },
                                                         enabled = !isLoading && jsonUrlInput.isNotBlank(),
-                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
                                                         modifier = Modifier.weight(1f)
                                                     ) {
                                                         Text("JSON Yükle")
@@ -1640,7 +1640,7 @@ private fun JoeApp() {
                                                             }
                                                         },
                                                         enabled = !isLoading && htmlUrlInput.isNotBlank(),
-                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
                                                         modifier = Modifier.weight(1f)
                                                     ) {
                                                         Text("HTML Tara")
@@ -1739,7 +1739,7 @@ private fun JoeApp() {
                                                         xtreamServerInput.isNotBlank() &&
                                                         xtreamUserInput.isNotBlank() &&
                                                         xtreamPassInput.isNotBlank(),
-                                                    colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                                                    colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .height(46.dp)
@@ -1799,7 +1799,7 @@ private fun JoeApp() {
                                                         }
                                                     },
                                                     enabled = !isLoading && macPortalUrlInput.isNotBlank() && macAddressInput.isNotBlank(),
-                                                    colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                                                    colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .height(46.dp)
@@ -1856,7 +1856,7 @@ private fun JoeApp() {
                                                             }
                                                         },
                                                         enabled = !isLoading && mhubUrlInput.isNotBlank(),
-                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
                                                         modifier = Modifier.weight(1f)
                                                     ) {
                                                         Text("Eklentiyi Yükle")
@@ -1915,7 +1915,7 @@ private fun JoeApp() {
                                                         }
                                                     },
                                                     enabled = !isLoading && githubUrlInput.isNotBlank(),
-                                                    colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                                                    colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .height(46.dp)
@@ -2028,7 +2028,7 @@ private fun JoeApp() {
                                     Icon(
                                         imageVector = Icons.Default.Delete,
                                         contentDescription = "Listeyi Sil",
-                                        tint = Color(0xFFD32F2F)
+                                        tint = AccentRed
                                     )
                                 }
                             }
@@ -2102,7 +2102,7 @@ private fun MediaShelfCard(
         color = CardDarkBg,
         border = BorderStroke(
             width = if (isSelected) 2.dp else 1.dp,
-            color = if (isSelected) AccentOrange else AccentOrange.copy(alpha = 0.55f)
+            color = if (isSelected) AccentRed else AccentRed.copy(alpha = 0.55f)
         ),
         modifier = modifier
     ) {
@@ -2116,7 +2116,7 @@ private fun MediaShelfCard(
                 Icon(
                     imageVector = if (channel.isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
                     contentDescription = "Favori",
-                    tint = if (channel.isFavorite) AccentOrange else Color.LightGray,
+                    tint = if (channel.isFavorite) AccentRed else Color.LightGray,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -2140,7 +2140,7 @@ private fun MediaShelfCard(
                     Icon(
                         imageVector = shelfIcon,
                         contentDescription = null,
-                        tint = if (isSelected) AccentOrange else Color.LightGray,
+                        tint = if (isSelected) AccentRed else Color.LightGray,
                         modifier = Modifier.size(22.dp)
                     )
 
