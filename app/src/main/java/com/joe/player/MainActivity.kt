@@ -42,10 +42,16 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -139,6 +145,22 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private fun applyFullScreenSystemBars(activity: ComponentActivity?, fullScreen: Boolean) {
+    val act = activity ?: return
+    val window = act.window
+    val controller = WindowCompat.getInsetsController(window, window.decorView)
+    if (fullScreen) {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        controller.systemBarsBehavior =
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+    } else {
+        WindowCompat.setDecorFitsSystemWindows(window, true)
+        controller.show(WindowInsetsCompat.Type.systemBars())
+    }
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun JoeApp() {
@@ -172,17 +194,17 @@ private fun JoeApp() {
 
     var activeChannel by remember { mutableStateOf<ChannelEntry?>(null) }
     var isPlayerFullScreen by remember { mutableStateOf(false) }
+    var showFullScreenOverlay by remember { mutableStateOf(true) }
+    var fillScreenAspect by remember { mutableStateOf(true) }
+    var overlayTriggerKey by remember { mutableIntStateOf(0) }
 
-    // Görsel önbelleği (URL -> ImageBitmap veya null başarısızsa)
     val imageCache = remember { mutableStateMapOf<String, ImageBitmap?>() }
 
-    // Xtream Dizi Bölüm Seçici Dialog durumları
     var selectedSeriesForEpisodes by remember { mutableStateOf<ChannelEntry?>(null) }
     var seriesEpisodes by remember { mutableStateOf<List<SeriesEpisodeItem>>(emptyList()) }
     var isFetchingEpisodes by remember { mutableStateOf(false) }
     var episodeErrorText by remember { mutableStateOf<String?>(null) }
 
-    // Arama, Kategori ve Sıralama durumları
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategoryFilter by remember { mutableStateOf("Tümü") }
@@ -190,7 +212,6 @@ private fun JoeApp() {
     var sortOrder by remember { mutableStateOf(SortOrder.DEFAULT) }
     var showSortMenu by remember { mutableStateOf(false) }
 
-    // Listelerim sekmesi durumları
     var importMode by remember { mutableStateOf(ImportMode.XTREAM) }
     var defaultImportKind by remember { mutableStateOf(MediaKind.LIVE) }
     var listNameInput by remember { mutableStateOf(savedSnapshot.lastListName) }
@@ -209,7 +230,6 @@ private fun JoeApp() {
     var statusText by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
 
-    // Kalıcı hafızaya kaydetme
     LaunchedEffect(allChannels, playlists, xtreamServerInput, xtreamUserInput, xtreamPassInput, listNameInput, autoPlayOnSelect) {
         val currentXtream = if (xtreamServerInput.isNotBlank() || xtreamUserInput.isNotBlank() || xtreamPassInput.isNotBlank()) {
             XtreamCredentials(
@@ -232,12 +252,24 @@ private fun JoeApp() {
         )
     }
 
-    // Tam ekranda serbest dönüş veya tam ekran çıkınca dikey moda dönüş
-    LaunchedEffect(isPlayerFullScreen) {
-        activity?.requestedOrientation = if (isPlayerFullScreen) {
+    LaunchedEffect(isPlayerFullScreen, activeChannel) {
+        val effectiveFullScreen = isPlayerFullScreen && activeChannel != null
+        activity?.requestedOrientation = if (effectiveFullScreen) {
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         } else {
             ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+        applyFullScreenSystemBars(activity, effectiveFullScreen)
+        if (effectiveFullScreen) {
+            showFullScreenOverlay = true
+            overlayTriggerKey++
+        }
+    }
+
+    LaunchedEffect(showFullScreenOverlay, overlayTriggerKey, isPlayerFullScreen) {
+        if (isPlayerFullScreen && showFullScreenOverlay) {
+            delay(5000L)
+            showFullScreenOverlay = false
         }
     }
 
@@ -245,8 +277,10 @@ private fun JoeApp() {
 
     DisposableEffect(exoPlayer) {
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        applyFullScreenSystemBars(activity, false)
         onDispose {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            applyFullScreenSystemBars(activity, false)
             exoPlayer.release()
         }
     }
@@ -316,9 +350,9 @@ private fun JoeApp() {
             }
         } else {
             activeChannel = item
-            if (item.kind == MediaKind.MOVIES) {
-                isPlayerFullScreen = true
-            }
+            isPlayerFullScreen = true
+            showFullScreenOverlay = true
+            overlayTriggerKey++
         }
     }
 
@@ -353,34 +387,255 @@ private fun JoeApp() {
         }
     }
 
-    // Tam ekran oynatıcı görünümü (yatay/dikey dönüşte içerik korunur)
+    // Tam Ekran Oynatıcı + Aynı Kategorideki Kanallar Overlay
     if (isPlayerFullScreen && activeChannel != null) {
+        val currentCh = activeChannel!!
+        val sameCategoryChannels = remember(allChannels, currentCh.kind, currentCh.group) {
+            val sameGroup = allChannels.filter { it.kind == currentCh.kind && it.group == currentCh.group }
+            if (sameGroup.isNotEmpty()) sameGroup else allChannels.filter { it.kind == currentCh.kind }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                .clickable(
+                    onClick = {
+                        showFullScreenOverlay = !showFullScreenOverlay
+                        if (showFullScreenOverlay) overlayTriggerKey++
+                    }
+                )
         ) {
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         player = exoPlayer
-                        useController = true
+                        useController = false
+                        resizeMode = if (fillScreenAspect) {
+                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                        } else {
+                            AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        }
+                    }
+                },
+                update = { view ->
+                    view.resizeMode = if (fillScreenAspect) {
+                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    } else {
+                        AspectRatioFrameLayout.RESIZE_MODE_FIT
                     }
                 },
                 modifier = Modifier.fillMaxSize()
             )
-            IconButton(
-                onClick = { isPlayerFullScreen = false },
-                modifier = Modifier
-                    .padding(16.dp)
-                    .align(Alignment.TopStart)
-                    .background(Color.Black.copy(alpha = 0.6f), CircleShape)
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Geri",
-                    tint = Color.White
-                )
+
+            if (showFullScreenOverlay) {
+                // Üst Bar: Geri, Şu Anki Kanal Bilgisi ve En/Boy Oranı Butonu
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                        .background(Color.Black.copy(alpha = 0.72f))
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        IconButton(
+                            onClick = { isPlayerFullScreen = false },
+                            modifier = Modifier
+                                .size(38.dp)
+                                .background(Color.White.copy(alpha = 0.14f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Küçült",
+                                tint = Color.White
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Surface(
+                                    color = AccentOrange,
+                                    shape = RoundedCornerShape(4.dp)
+                                ) {
+                                    Text(
+                                        text = "İZLENİYOR",
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                                Text(
+                                    text = currentCh.group,
+                                    color = Color.LightGray,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Text(
+                                text = currentCh.name,
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        IconButton(
+                            onClick = {
+                                fillScreenAspect = !fillScreenAspect
+                                overlayTriggerKey++
+                            },
+                            modifier = Modifier
+                                .size(38.dp)
+                                .background(Color.White.copy(alpha = 0.14f), CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = if (fillScreenAspect) Icons.Default.FitScreen else Icons.Default.Fullscreen,
+                                contentDescription = "Ekran Sığdırma",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                                overlayTriggerKey++
+                            },
+                            modifier = Modifier
+                                .size(38.dp)
+                                .background(AccentOrange, CircleShape)
+                        ) {
+                            Icon(
+                                imageVector = if (exoPlayer.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = "Oynat/Duraklat",
+                                tint = Color.White
+                            )
+                        }
+                    }
+                }
+
+                // Alt Bar: Aynı Kategorideki Kanallar (Oynatıcıyı Kapatmadan Hızlı Geçiş)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .background(Color.Black.copy(alpha = 0.82f))
+                        .padding(vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "${currentCh.group} (${sameCategoryChannels.size} kanal)",
+                        color = Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        items(sameCategoryChannels, key = { it.id }) { ch ->
+                            val isCurrent = ch.id == currentCh.id
+                            val chPoster = ch.posterUrl?.trim()?.takeIf { it.isNotBlank() }
+                            LaunchedEffect(chPoster) {
+                                if (chPoster != null && !imageCache.containsKey(chPoster)) {
+                                    imageCache[chPoster] = withContext(Dispatchers.IO) {
+                                        downloadImageBitmap(chPoster)
+                                    }
+                                }
+                            }
+                            val chBitmap = if (chPoster != null) imageCache[chPoster] else null
+
+                            Surface(
+                                onClick = {
+                                    if (ch.kind == MediaKind.SERIES && ch.xtreamSeriesId != null && ch.xtreamCreds != null) {
+                                        isPlayerFullScreen = false
+                                        handleCardClick(ch)
+                                    } else {
+                                        activeChannel = ch
+                                        overlayTriggerKey++
+                                    }
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isCurrent) AccentOrange.copy(alpha = 0.25f) else CardDarkBg,
+                                border = BorderStroke(
+                                    width = if (isCurrent) 2.5.dp else 1.dp,
+                                    color = if (isCurrent) AccentOrange else Color.White.copy(alpha = 0.2f)
+                                ),
+                                modifier = Modifier
+                                    .width(150.dp)
+                                    .height(82.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(Color(0xFF1A1A1A)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (chBitmap != null) {
+                                            Image(
+                                                bitmap = chBitmap,
+                                                contentDescription = ch.name,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Default.LiveTv,
+                                                contentDescription = null,
+                                                tint = if (isCurrent) AccentOrange else Color.LightGray,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        if (isCurrent) {
+                                            Text(
+                                                text = "ŞU ANKİ KANAL",
+                                                color = AccentOrange,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold
+                                            )
+                                        }
+                                        Text(
+                                            text = ch.name,
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            lineHeight = 13.sp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         return
