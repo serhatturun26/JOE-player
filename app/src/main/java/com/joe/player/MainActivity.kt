@@ -149,10 +149,22 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v12"
+private const val PREFS_NAME = "joe_player_prefs_v13"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
+
+private fun defaultDemoChannels(): List<ChannelEntry> {
+    return listOf(
+        ChannelEntry(
+            id = "demo-live-1",
+            name = "Test Yayın 1 | FHD",
+            url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+            group = "Demo Kanallar",
+            kind = MediaKind.LIVE
+        )
+    )
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -221,7 +233,8 @@ private fun JoeApp() {
     val savedSnapshot = remember { loadPersistentState(context) }
 
     var currentRoute by remember { mutableStateOf(BottomRoute.HOME) }
-    var selectedMediaKind by remember { mutableStateOf(MediaKind.LIVE) }
+    var defaultStartKind by remember { mutableStateOf(savedSnapshot.defaultKind) }
+    var selectedMediaKind by remember { mutableStateOf(savedSnapshot.defaultKind) }
     var playlists by remember { mutableStateOf(savedSnapshot.playlists) }
     var recentWatches by remember { mutableStateOf(savedSnapshot.recentWatches) }
 
@@ -230,15 +243,7 @@ private fun JoeApp() {
             if (savedSnapshot.channels.isNotEmpty()) {
                 savedSnapshot.channels
             } else {
-                listOf(
-                    ChannelEntry(
-                        id = "demo-live-1",
-                        name = "Test Yayın 1 | FHD",
-                        url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-                        group = "Demo Kanallar",
-                        kind = MediaKind.LIVE
-                    )
-                )
+                defaultDemoChannels()
             }
         )
     }
@@ -246,7 +251,7 @@ private fun JoeApp() {
     var activeChannel by remember { mutableStateOf<ChannelEntry?>(null) }
     var isPlayerFullScreen by remember { mutableStateOf(false) }
     var showFullScreenOverlay by remember { mutableStateOf(true) }
-    var fillScreenAspect by remember { mutableStateOf(true) }
+    var fillScreenAspect by remember { mutableStateOf(savedSnapshot.zoomToFillDefault) }
 
     var selectedSeriesForEpisodes by remember { mutableStateOf<ChannelEntry?>(null) }
     var seriesEpisodes by remember { mutableStateOf<List<SeriesEpisodeItem>>(emptyList()) }
@@ -299,6 +304,8 @@ private fun JoeApp() {
     var originInput by remember { mutableStateOf(savedSnapshot.headers.origin) }
 
     var autoPlayOnSelect by remember { mutableStateOf(savedSnapshot.autoPlay) }
+    var showResetAllDialog by remember { mutableStateOf(false) }
+    var settingsFeedback by remember { mutableStateOf<String?>(null) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
 
@@ -317,7 +324,9 @@ private fun JoeApp() {
         channels: List<ChannelEntry> = allChannels,
         lists: List<SavedPlaylist> = playlists,
         recents: List<RecentWatchEntry> = recentWatches,
-        autoPlay: Boolean = autoPlayOnSelect
+        autoPlay: Boolean = autoPlayOnSelect,
+        zoomDefault: Boolean = fillScreenAspect,
+        startKind: MediaKind = defaultStartKind
     ) {
         val currentXtream = if (xtreamServerInput.isNotBlank() || xtreamUserInput.isNotBlank() || xtreamPassInput.isNotBlank()) {
             XtreamCredentials(
@@ -335,7 +344,9 @@ private fun JoeApp() {
             xtream = currentXtream,
             headers = currentHeaders(),
             lastListName = xtreamNameInput,
-            autoPlay = autoPlay
+            autoPlay = autoPlay,
+            zoomToFillDefault = zoomDefault,
+            defaultKind = startKind
         )
         scope.launch(Dispatchers.IO) {
             savePersistentState(context = context, snapshot = snapshot)
@@ -612,6 +623,49 @@ private fun JoeApp() {
                 }
             }
         }
+    }
+
+    if (showResetAllDialog) {
+        AlertDialog(
+            onDismissRequest = { showResetAllDialog = false },
+            title = { Text("Tüm Verileri Sıfırla", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("Kayıtlı tüm listeler, favoriler, son izlenenler ve hesap bilgileri silinecek. Emin misin?")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showResetAllDialog = false
+                        activeChannel = null
+                        isPlayerFullScreen = false
+                        val demos = defaultDemoChannels()
+                        allChannels = demos
+                        playlists = emptyList()
+                        recentWatches = emptyList()
+                        xtreamNameInput = ""
+                        xtreamServerInput = ""
+                        xtreamUserInput = ""
+                        xtreamPassInput = ""
+                        userAgentInput = ""
+                        refererInput = ""
+                        originInput = ""
+                        selectedCategoryFilter = "Tümü"
+                        onlyFavoritesFilter = false
+                        settingsFeedback = "Tüm kayıtlı listeler ve geçmiş sıfırlandı."
+                        scope.launch(Dispatchers.IO) {
+                            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
+                        }
+                    }
+                ) {
+                    Text("Sıfırla", color = AccentRed, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetAllDialog = false }) {
+                    Text("İptal")
+                }
+            }
+        )
     }
 
     if (isPlayerFullScreen && activeChannel != null) {
@@ -976,7 +1030,10 @@ private fun JoeApp() {
                 )
                 NavigationBarItem(
                     selected = currentRoute == BottomRoute.SETTINGS,
-                    onClick = { currentRoute = BottomRoute.SETTINGS },
+                    onClick = {
+                        settingsFeedback = null
+                        currentRoute = BottomRoute.SETTINGS
+                    },
                     icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                     label = { Text("Ayarlar") },
                     colors = NavigationBarItemDefaults.colors(
@@ -2234,38 +2291,174 @@ private fun JoeApp() {
             }
 
             BottomRoute.SETTINGS -> {
-                Column(
+                LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
-                        .padding(16.dp),
+                        .padding(horizontal = 16.dp),
+                    contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        text = "Ayarlar",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF1A1A1A)
-                    )
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                    item {
+                        Text(
+                            text = "Ayarlar",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF1A1A1A)
+                        )
+                    }
+
+                    if (settingsFeedback != null) {
+                        item {
+                            Surface(
+                                color = AccentRed.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = settingsFeedback!!,
+                                    color = AccentRed,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("İçerik seçilince otomatik oynat")
-                            Switch(
-                                checked = autoPlayOnSelect,
-                                onCheckedChange = {
-                                    autoPlayOnSelect = it
-                                    persistNow(autoPlay = it)
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Otomatik Oynat", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        text = "İçerik seçildiğinde oynatmayı hemen başlat",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.Gray
+                                    )
                                 }
-                            )
+                                Switch(
+                                    checked = autoPlayOnSelect,
+                                    onCheckedChange = {
+                                        autoPlayOnSelect = it
+                                        persistNow(autoPlay = it)
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Varsayılan Ekran Sığdırma", fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        text = if (fillScreenAspect) "Tam Ekran Sığdır (Zoom)" else "Orijinal En/Boy Oranı",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.Gray
+                                    )
+                                }
+                                Switch(
+                                    checked = fillScreenAspect,
+                                    onCheckedChange = {
+                                        fillScreenAspect = it
+                                        persistNow(zoomDefault = it)
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text("Varsayılan Açılış Bölümü", fontWeight = FontWeight.SemiBold)
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    MediaKind.entries.forEach { kind ->
+                                        FilterChip(
+                                            selected = defaultStartKind == kind,
+                                            onClick = {
+                                                defaultStartKind = kind
+                                                selectedMediaKind = kind
+                                                selectedCategoryFilter = "Tümü"
+                                                persistNow(startKind = kind)
+                                            },
+                                            label = { Text(kind.label, maxLines = 1, fontSize = 12.sp) },
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                selectedContainerColor = AccentRed,
+                                                selectedLabelColor = Color.White
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text("Veri ve Geçmiş Yönetimi", fontWeight = FontWeight.SemiBold)
+
+                                OutlinedButton(
+                                    onClick = {
+                                        recentWatches = emptyList()
+                                        persistNow(recents = emptyList())
+                                        settingsFeedback = "Son izlenenler geçmişi temizlendi."
+                                    },
+                                    enabled = recentWatches.isNotEmpty(),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.History, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Son İzlenenleri Temizle (${recentWatches.size})")
+                                }
+
+                                Button(
+                                    onClick = { showResetAllDialog = true },
+                                    colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Default.DeleteForever, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Tüm Listeleri ve Verileri Sıfırla")
+                                }
+                            }
                         }
                     }
                 }
@@ -2424,7 +2617,9 @@ private data class PersistentSnapshot(
     val xtream: XtreamCredentials? = null,
     val headers: CustomHeadersConfig = CustomHeadersConfig(),
     val lastListName: String = "",
-    val autoPlay: Boolean = true
+    val autoPlay: Boolean = true,
+    val zoomToFillDefault: Boolean = true,
+    val defaultKind: MediaKind = MediaKind.LIVE
 )
 
 private fun loadPersistentState(context: Context): PersistentSnapshot {
@@ -2489,6 +2684,9 @@ private fun loadPersistentState(context: Context): PersistentSnapshot {
             )
         }
 
+        val kindName = root.optString("defaultKind", MediaKind.LIVE.name)
+        val parsedKind = runCatching { MediaKind.valueOf(kindName) }.getOrDefault(MediaKind.LIVE)
+
         PersistentSnapshot(
             channels = channels,
             playlists = playlists,
@@ -2496,7 +2694,9 @@ private fun loadPersistentState(context: Context): PersistentSnapshot {
             xtream = xtream,
             headers = headers,
             lastListName = root.optString("lastListName", ""),
-            autoPlay = root.optBoolean("autoPlay", true)
+            autoPlay = root.optBoolean("autoPlay", true),
+            zoomToFillDefault = root.optBoolean("zoomToFillDefault", true),
+            defaultKind = parsedKind
         )
     }.getOrDefault(PersistentSnapshot())
 }
@@ -2531,6 +2731,8 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) 
         val root = JSONObject()
         root.put("lastListName", snapshot.lastListName)
         root.put("autoPlay", snapshot.autoPlay)
+        root.put("zoomToFillDefault", snapshot.zoomToFillDefault)
+        root.put("defaultKind", snapshot.defaultKind.name)
 
         snapshot.xtream?.let { x ->
             root.put(
