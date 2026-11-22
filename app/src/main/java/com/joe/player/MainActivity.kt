@@ -168,7 +168,7 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v15"
+private const val PREFS_NAME = "joe_player_prefs_v16"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
@@ -1002,68 +1002,83 @@ private fun JoeApp() {
                             )
                         }
                     }
+                }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        IconButton(
-                            onClick = { prevChannel?.let { activeChannel = it } },
-                            enabled = prevChannel != null,
-                            modifier = Modifier
-                                .size(38.dp)
-                                .background(
-                                    if (prevChannel != null) Color.White.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.05f),
-                                    CircleShape
-                                )
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.SkipPrevious,
-                                contentDescription = "Önceki Kanal",
-                                tint = if (prevChannel != null) Color.White else Color.Gray
+                // Resimde sol orta "X" ile işaretlenen alan: Önceki / Sonraki Kanal
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .padding(start = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    IconButton(
+                        onClick = { prevChannel?.let { activeChannel = it } },
+                        enabled = prevChannel != null,
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(
+                                if (prevChannel != null) Color.Black.copy(alpha = 0.72f) else Color.Black.copy(alpha = 0.35f),
+                                CircleShape
                             )
-                        }
-                        IconButton(
-                            onClick = { nextChannel?.let { activeChannel = it } },
-                            enabled = nextChannel != null,
-                            modifier = Modifier
-                                .size(38.dp)
-                                .background(
-                                    if (nextChannel != null) Color.White.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.05f),
-                                    CircleShape
-                                )
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.SkipNext,
-                                contentDescription = "Sonraki Kanal",
-                                tint = if (nextChannel != null) Color.White else Color.Gray
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SkipPrevious,
+                            contentDescription = "Önceki Kanal",
+                            tint = if (prevChannel != null) Color.White else Color.Gray
+                        )
+                    }
+                    IconButton(
+                        onClick = { nextChannel?.let { activeChannel = it } },
+                        enabled = nextChannel != null,
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(
+                                if (nextChannel != null) Color.Black.copy(alpha = 0.72f) else Color.Black.copy(alpha = 0.35f),
+                                CircleShape
                             )
-                        }
-                        IconButton(
-                            onClick = { fillScreenAspect = !fillScreenAspect },
-                            modifier = Modifier
-                                .size(38.dp)
-                                .background(Color.White.copy(alpha = 0.14f), CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = if (fillScreenAspect) Icons.Default.FitScreen else Icons.Default.Fullscreen,
-                                contentDescription = "Ekran Sığdırma",
-                                tint = Color.White
-                            )
-                        }
-                        IconButton(
-                            onClick = {
-                                runCatching {
-                                    if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                                }
-                            },
-                            modifier = Modifier
-                                .size(38.dp)
-                                .background(AccentRed, CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = if (exoPlayer.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = "Oynat/Duraklat",
-                                tint = Color.White
-                            )
-                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SkipNext,
+                            contentDescription = "Sonraki Kanal",
+                            tint = if (nextChannel != null) Color.White else Color.Gray
+                        )
+                    }
+                }
+
+                // Resimde sağ orta "X" ile işaretlenen alan: Ekran Sığdırma ve Oynat/Duraklat
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    IconButton(
+                        onClick = { fillScreenAspect = !fillScreenAspect },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(Color.Black.copy(alpha = 0.72f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = if (fillScreenAspect) Icons.Default.FitScreen else Icons.Default.Fullscreen,
+                            contentDescription = "Ekran Sığdırma",
+                            tint = Color.White
+                        )
+                    }
+                    IconButton(
+                        onClick = {
+                            runCatching {
+                                if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                            }
+                        },
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(AccentRed, CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = if (exoPlayer.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = "Oynat/Duraklat",
+                            tint = Color.White
+                        )
                     }
                 }
 
