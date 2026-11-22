@@ -66,6 +66,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.File
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
@@ -187,8 +188,10 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v24"
+private const val PREFS_NAME = "joe_player_prefs_v25"
 private const val KEY_STATE_JSON = "saved_state_json"
+private const val STATE_FILE_NAME = "joe_player_state.json"
+private const val STATE_TEMP_FILE_NAME = "joe_player_state.tmp"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
 
@@ -1041,7 +1044,7 @@ private fun JoeApp() {
                         onlyFavoritesFilter = false
                         settingsFeedback = "Tüm kayıtlı listeler ve geçmiş sıfırlandı."
                         scope.launch(Dispatchers.IO) {
-                            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
+                            clearAllPersistentState(context)
                         }
                     }
                 ) {
@@ -1479,7 +1482,6 @@ private fun JoeApp() {
                     }
                 }
 
-                // Sol taraf: Önceki / Sonraki Kanal düğmeleri (biraz yukarı kaydırıldı)
                 Column(
                     modifier = Modifier
                         .align(Alignment.CenterStart)
@@ -1520,7 +1522,6 @@ private fun JoeApp() {
                     }
                 }
 
-                // Sağ taraf: Ekran Sığdırma ve Oynat/Duraklat düğmeleri
                 Column(
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
@@ -3570,10 +3571,9 @@ private data class PersistentSnapshot(
     val defaultKind: MediaKind = MediaKind.LIVE
 )
 
-private fun loadPersistentState(context: Context): PersistentSnapshot {
+private fun parseSnapshotJson(raw: String): PersistentSnapshot? {
+    if (raw.isBlank()) return null
     return runCatching {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val raw = prefs.getString(KEY_STATE_JSON, null) ?: return@runCatching PersistentSnapshot()
         val root = JSONObject(raw)
 
         val xtreamObj = root.optJSONObject("xtream")
@@ -3670,7 +3670,40 @@ private fun loadPersistentState(context: Context): PersistentSnapshot {
             zoomToFillDefault = root.optBoolean("zoomToFillDefault", true),
             defaultKind = parsedKind
         )
-    }.getOrDefault(PersistentSnapshot())
+    }.getOrNull()
+}
+
+private fun loadPersistentState(context: Context): PersistentSnapshot {
+    val stateFile = File(context.filesDir, STATE_FILE_NAME)
+    val tempFile = File(context.filesDir, STATE_TEMP_FILE_NAME)
+
+    if (stateFile.exists() && stateFile.length() > 0L) {
+        val fromFile = runCatching { stateFile.readText(StandardCharsets.UTF_8) }
+            .getOrNull()
+            ?.let(::parseSnapshotJson)
+        if (fromFile != null) return fromFile
+    }
+
+    if (tempFile.exists() && tempFile.length() > 0L) {
+        val fromTemp = runCatching { tempFile.readText(StandardCharsets.UTF_8) }
+            .getOrNull()
+            ?.let(::parseSnapshotJson)
+        if (fromTemp != null) return fromTemp
+    }
+
+    val legacyPrefsNames = listOf(PREFS_NAME, "joe_player_prefs_v24", "joe_player_prefs_v23")
+    for (prefName in legacyPrefsNames) {
+        val raw = runCatching {
+            context.getSharedPreferences(prefName, Context.MODE_PRIVATE).getString(KEY_STATE_JSON, null)
+        }.getOrNull().orEmpty()
+        val parsed = parseSnapshotJson(raw)
+        if (parsed != null && (parsed.channels.isNotEmpty() || parsed.playlists.isNotEmpty())) {
+            savePersistentState(context, parsed)
+            return parsed
+        }
+    }
+
+    return PersistentSnapshot()
 }
 
 private fun parseChannelsArray(arr: JSONArray, fallbackXtream: XtreamCredentials?): List<ChannelEntry> {
@@ -3770,10 +3803,25 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) 
         }
         root.put("recentWatches", recArr)
 
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_STATE_JSON, root.toString())
-            .apply()
+        val jsonText = root.toString()
+        val stateFile = File(context.filesDir, STATE_FILE_NAME)
+        val tempFile = File(context.filesDir, STATE_TEMP_FILE_NAME)
+        tempFile.writeText(jsonText, StandardCharsets.UTF_8)
+        if (stateFile.exists() && !stateFile.delete()) {
+            stateFile.writeText(jsonText, StandardCharsets.UTF_8)
+        } else {
+            tempFile.renameTo(stateFile)
+        }
+    }
+}
+
+private fun clearAllPersistentState(context: Context) {
+    runCatching {
+        File(context.filesDir, STATE_FILE_NAME).delete()
+        File(context.filesDir, STATE_TEMP_FILE_NAME).delete()
+        listOf(PREFS_NAME, "joe_player_prefs_v24", "joe_player_prefs_v23").forEach { prefName ->
+            context.getSharedPreferences(prefName, Context.MODE_PRIVATE).edit().clear().apply()
+        }
     }
 }
 
