@@ -49,10 +49,15 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackGroup
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -114,6 +119,14 @@ data class SeriesEpisodeItem(
     val streamUrl: String
 )
 
+private data class selectableTrackOption(
+    val trackType: @C.TrackType Int,
+    val mediaTrackGroup: TrackGroup,
+    val trackIndex: Int,
+    val title: String,
+    val isSelected: Boolean
+)
+
 enum class PlaylistSourceType {
     STREAM,
     M3U8,
@@ -173,13 +186,85 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v22"
+private const val PREFS_NAME = "joe_player_prefs_v23"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
 
 private val posterExecutor = Executors.newFixedThreadPool(3)
 private val activePosterJobs = AtomicInteger(0)
+
+private fun formatLanguageLabel(format: Format, fallbackIndex: Int, isAudio: Boolean): String {
+    val rawLang = format.language?.trim().orEmpty()
+    val locale = if (rawLang.isNotEmpty() && !rawLang.equals("und", ignoreCase = true)) {
+        Locale.forLanguageTag(rawLang.replace('_', '-'))
+    } else {
+        null
+    }
+    val displayLang = locale?.getDisplayLanguage(Locale("tr", "TR"))
+        ?.takeIf { it.isNotBlank() && !it.equals(rawLang, ignoreCase = true) }
+        ?.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale("tr", "TR")) else it.toString() }
+
+    val baseName = format.label?.trim()?.takeIf { it.isNotEmpty() }
+        ?: displayLang
+        ?: if (rawLang.isNotEmpty() && !rawLang.equals("und", ignoreCase = true)) {
+            rawLang.uppercase(Locale.getDefault())
+        } else {
+            if (isAudio) "Ses ${fallbackIndex + 1}" else "Altyazı ${fallbackIndex + 1}"
+        }
+
+    val details = buildList {
+        if (displayLang != null && !baseName.contains(displayLang, ignoreCase = true)) {
+            add(displayLang)
+        }
+        if (isAudio && format.channelCount > 0) {
+            add("${format.channelCount}ch")
+        }
+    }
+    return if (details.isEmpty()) baseName else "$baseName (${details.joinToString(", ")})"
+}
+
+private fun extractTrackOptions(tracks: Tracks): Pair<List<selectableTrackOption>, List<selectableTrackOption>> {
+    val audioList = mutableListOf<selectableTrackOption>()
+    val textList = mutableListOf<selectableTrackOption>()
+
+    tracks.groups.forEach { group ->
+        if (!group.isSupported) return@forEach
+        when (group.type) {
+            C.TRACK_TYPE_AUDIO -> {
+                for (i in 0 until group.length) {
+                    if (!group.isTrackSupported(i)) continue
+                    val fmt = group.getTrackFormat(i)
+                    audioList.add(
+                        selectableTrackOption(
+                            trackType = C.TRACK_TYPE_AUDIO,
+                            mediaTrackGroup = group.mediaTrackGroup,
+                            trackIndex = i,
+                            title = formatLanguageLabel(fmt, audioList.size, isAudio = true),
+                            isSelected = group.isTrackSelected(i)
+                        )
+                    )
+                }
+            }
+            C.TRACK_TYPE_TEXT -> {
+                for (i in 0 until group.length) {
+                    if (!group.isTrackSupported(i)) continue
+                    val fmt = group.getTrackFormat(i)
+                    textList.add(
+                        selectableTrackOption(
+                            trackType = C.TRACK_TYPE_TEXT,
+                            mediaTrackGroup = group.mediaTrackGroup,
+                            trackIndex = i,
+                            title = formatLanguageLabel(fmt, textList.size, isAudio = false),
+                            isSelected = group.isTrackSelected(i)
+                        )
+                    )
+                }
+            }
+        }
+    }
+    return audioList to textList
+}
 
 private fun formatDurationBadge(positionMs: Long): String? {
     if (positionMs < 5_000L) return null
@@ -284,6 +369,7 @@ private fun JoeApp() {
     var activeChannel by remember { mutableStateOf<ChannelEntry?>(null) }
     var isPlayerFullScreen by remember { mutableStateOf(false) }
     var showFullScreenOverlay by remember { mutableStateOf(true) }
+    var showTrackSelectorDialog by remember { mutableStateOf(false) }
     var fillScreenAspect by remember { mutableStateOf(savedSnapshot.zoomToFillDefault) }
     var playbackStatusLabel by remember { mutableStateOf("Hazır") }
     var playbackErrorMessage by remember { mutableStateOf<String?>(null) }
@@ -345,8 +431,21 @@ private fun JoeApp() {
     var isLoading by remember { mutableStateOf(false) }
     var refreshingPlaylistId by remember { mutableStateOf<String?>(null) }
 
-    val exoPlayer = remember { ExoPlayer.Builder(context).build() }
+    val trackSelector = remember {
+        DefaultTrackSelector(context).apply {
+            parameters = buildUponParameters()
+                .setPreferredAudioLanguage("tr")
+                .setPreferredTextLanguage("tr")
+                .build()
+        }
+    }
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context)
+            .setTrackSelector(trackSelector)
+            .build()
+    }
     var isPlayingState by remember { mutableStateOf(false) }
+    var currentTracksState by remember { mutableStateOf(Tracks.EMPTY) }
 
     fun currentHeaders(): CustomHeadersConfig {
         return CustomHeadersConfig(
@@ -563,6 +662,10 @@ private fun JoeApp() {
                 }
             }
 
+            override fun onTracksChanged(tracks: Tracks) {
+                currentTracksState = tracks
+            }
+
             override fun onPlayerError(error: PlaybackException) {
                 playbackStatusLabel = "Hata"
                 playbackErrorMessage = error.localizedMessage?.takeIf { it.isNotBlank() }
@@ -606,8 +709,17 @@ private fun JoeApp() {
         val target = current?.url
         runCatching {
             playbackErrorMessage = null
+            showTrackSelectorDialog = false
             if (current != null && !target.isNullOrBlank()) {
                 playbackStatusLabel = "Yükleniyor..."
+                currentTracksState = Tracks.EMPTY
+                exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                    .buildUpon()
+                    .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                    .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                    .setPreferredAudioLanguage("tr")
+                    .setPreferredTextLanguage("tr")
+                    .build()
                 val savedPos = recentWatches.firstOrNull {
                     it.channel.kind == current.kind &&
                         it.channel.id == current.id &&
@@ -624,6 +736,7 @@ private fun JoeApp() {
                 isPlayingState = autoPlayOnSelect
             } else {
                 playbackStatusLabel = "Hazır"
+                currentTracksState = Tracks.EMPTY
                 exoPlayer.stop()
                 exoPlayer.clearMediaItems()
                 isPlayingState = false
@@ -864,6 +977,212 @@ private fun JoeApp() {
         )
     }
 
+    if (showTrackSelectorDialog && activeChannel != null) {
+        val (audioOptions, textOptions) = remember(currentTracksState) {
+            extractTrackOptions(currentTracksState)
+        }
+        val hasTextOverride = remember(exoPlayer.trackSelectionParameters) {
+            exoPlayer.trackSelectionParameters.overrides.entries.any { (_, ov) ->
+                textOptions.any { it.mediaTrackGroup == ov.mediaTrackGroup }
+            }
+        }
+        val isTextDisabled = exoPlayer.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
+
+        AlertDialog(
+            onDismissRequest = { showTrackSelectorDialog = false },
+            title = { Text("Ses Dili ve Altyazı", fontWeight = FontWeight.Bold) },
+            text = {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    item {
+                        Text(
+                            text = "Ses Dili",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AccentRed
+                        )
+                    }
+
+                    if (audioOptions.isEmpty()) {
+                        item {
+                            Text(
+                                text = "Bu yayında ayrı ses dili bilgisi bulunamadı (varsayılan ses aktif).",
+                                fontSize = 12.sp,
+                                color = Color.DarkGray
+                            )
+                        }
+                    } else {
+                        itemsIndexed(audioOptions, key = { idx, opt -> "aud-$idx-${opt.title}" }) { _, opt ->
+                            Surface(
+                                onClick = {
+                                    runCatching {
+                                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                                            .buildUpon()
+                                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                                            .setOverrideForType(
+                                                TrackSelectionOverride(opt.mediaTrackGroup, listOf(opt.trackIndex))
+                                            )
+                                            .build()
+                                    }
+                                    showTrackSelectorDialog = false
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (opt.isSelected) AccentRed.copy(alpha = 0.14f) else Color(0xFFF3F3F3),
+                                border = BorderStroke(
+                                    width = if (opt.isSelected) 1.5.dp else 1.dp,
+                                    color = if (opt.isSelected) AccentRed else Color.Transparent
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = opt.title,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (opt.isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (opt.isSelected) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = AccentRed,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "Altyazı",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AccentRed
+                        )
+                    }
+
+                    if (textOptions.isEmpty()) {
+                        item {
+                            Text(
+                                text = "Bu yayında altyazı izi bulunamadı.",
+                                fontSize = 12.sp,
+                                color = Color.DarkGray
+                            )
+                        }
+                    } else {
+                        item {
+                            val offSelected = isTextDisabled || !hasTextOverride
+                            Surface(
+                                onClick = {
+                                    runCatching {
+                                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                                            .buildUpon()
+                                            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                                            .build()
+                                    }
+                                    showTrackSelectorDialog = false
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (offSelected) AccentRed.copy(alpha = 0.14f) else Color(0xFFF3F3F3),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Altyazı Kapalı",
+                                        fontSize = 13.sp,
+                                        fontWeight = if (offSelected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                    if (offSelected) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = AccentRed,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        itemsIndexed(textOptions, key = { idx, opt -> "sub-$idx-${opt.title}" }) { _, opt ->
+                            val selectedNow = !isTextDisabled && opt.isSelected
+                            Surface(
+                                onClick = {
+                                    runCatching {
+                                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                                            .buildUpon()
+                                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                                            .setOverrideForType(
+                                                TrackSelectionOverride(opt.mediaTrackGroup, listOf(opt.trackIndex))
+                                            )
+                                            .build()
+                                    }
+                                    showTrackSelectorDialog = false
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (selectedNow) AccentRed.copy(alpha = 0.14f) else Color(0xFFF3F3F3),
+                                border = BorderStroke(
+                                    width = if (selectedNow) 1.5.dp else 1.dp,
+                                    color = if (selectedNow) AccentRed else Color.Transparent
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = opt.title,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (selectedNow) FontWeight.Bold else FontWeight.Medium,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (selectedNow) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = AccentRed,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTrackSelectorDialog = false }) {
+                    Text("Kapat", color = AccentRed)
+                }
+            }
+        )
+    }
+
     if (isPlayerFullScreen && activeChannel != null) {
         val currentCh = activeChannel!!
         val sameCategoryChannels = remember(allChannels, currentCh.kind, currentCh.group) {
@@ -1040,6 +1359,34 @@ private fun JoeApp() {
                                 fontWeight = FontWeight.Bold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    Surface(
+                        onClick = { showTrackSelectorDialog = true },
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color.White.copy(alpha = 0.16f)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Language,
+                                contentDescription = "Ses Dili",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = "Dil / Ses",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                softWrap = false
                             )
                         }
                     }
