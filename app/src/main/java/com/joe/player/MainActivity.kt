@@ -123,6 +123,7 @@ private data class selectableTrackOption(
     val trackType: @C.TrackType Int,
     val mediaTrackGroup: TrackGroup,
     val trackIndex: Int,
+    val languageCode: String,
     val title: String,
     val isSelected: Boolean
 )
@@ -186,13 +187,19 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v23"
+private const val PREFS_NAME = "joe_player_prefs_v24"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
 
 private val posterExecutor = Executors.newFixedThreadPool(3)
 private val activePosterJobs = AtomicInteger(0)
+
+private fun normalizeLangTag(raw: String?): String {
+    val clean = raw?.trim().orEmpty()
+    if (clean.isEmpty() || clean.equals("und", ignoreCase = true)) return ""
+    return clean.replace('_', '-').substringBefore('-').lowercase(Locale.ROOT)
+}
 
 private fun formatLanguageLabel(format: Format, fallbackIndex: Int, isAudio: Boolean): String {
     val rawLang = format.language?.trim().orEmpty()
@@ -240,6 +247,7 @@ private fun extractTrackOptions(tracks: Tracks): Pair<List<selectableTrackOption
                             trackType = C.TRACK_TYPE_AUDIO,
                             mediaTrackGroup = group.mediaTrackGroup,
                             trackIndex = i,
+                            languageCode = normalizeLangTag(fmt.language),
                             title = formatLanguageLabel(fmt, audioList.size, isAudio = true),
                             isSelected = group.isTrackSelected(i)
                         )
@@ -255,6 +263,7 @@ private fun extractTrackOptions(tracks: Tracks): Pair<List<selectableTrackOption
                             trackType = C.TRACK_TYPE_TEXT,
                             mediaTrackGroup = group.mediaTrackGroup,
                             trackIndex = i,
+                            languageCode = normalizeLangTag(fmt.language),
                             title = formatLanguageLabel(fmt, textList.size, isAudio = false),
                             isSelected = group.isTrackSelected(i)
                         )
@@ -264,6 +273,19 @@ private fun extractTrackOptions(tracks: Tracks): Pair<List<selectableTrackOption
         }
     }
     return audioList to textList
+}
+
+private fun buildTrackBadgeText(tracks: Tracks, isTextDisabled: Boolean): String {
+    val (audioOptions, textOptions) = extractTrackOptions(tracks)
+    val activeAudio = audioOptions.firstOrNull { it.isSelected } ?: audioOptions.firstOrNull()
+    val audioTag = when {
+        activeAudio != null && activeAudio.languageCode.isNotBlank() ->
+            activeAudio.languageCode.uppercase(Locale.ROOT)
+        activeAudio != null -> "SES"
+        else -> "DİL"
+    }
+    val hasActiveText = !isTextDisabled && textOptions.any { it.isSelected }
+    return if (hasActiveText) "$audioTag • ALT" else audioTag
 }
 
 private fun formatDurationBadge(positionMs: Long): String? {
@@ -370,6 +392,9 @@ private fun JoeApp() {
     var isPlayerFullScreen by remember { mutableStateOf(false) }
     var showFullScreenOverlay by remember { mutableStateOf(true) }
     var showTrackSelectorDialog by remember { mutableStateOf(false) }
+    var preferredAudioLangOverride by remember { mutableStateOf<String?>(null) }
+    var preferredTextLangOverride by remember { mutableStateOf<String?>(null) }
+    var liveAutoRetryCount by remember { mutableIntStateOf(0) }
     var fillScreenAspect by remember { mutableStateOf(savedSnapshot.zoomToFillDefault) }
     var playbackStatusLabel by remember { mutableStateOf("Hazır") }
     var playbackErrorMessage by remember { mutableStateOf<String?>(null) }
@@ -657,16 +682,61 @@ private fun JoeApp() {
                     Player.STATE_ENDED -> "Tamamlandı"
                     else -> "Hazır"
                 }
-                if (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING) {
+                if (playbackState == Player.STATE_READY) {
+                    playbackErrorMessage = null
+                    liveAutoRetryCount = 0
+                } else if (playbackState == Player.STATE_BUFFERING) {
                     playbackErrorMessage = null
                 }
             }
 
             override fun onTracksChanged(tracks: Tracks) {
                 currentTracksState = tracks
+                val (audioOpts, textOpts) = extractTrackOptions(tracks)
+                val targetAudioLang = preferredAudioLangOverride
+                if (!targetAudioLang.isNullOrBlank() && targetAudioLang != "tr") {
+                    val matchingAudio = audioOpts.firstOrNull {
+                        it.languageCode.equals(targetAudioLang, ignoreCase = true)
+                    }
+                    if (matchingAudio == null) {
+                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                            .buildUpon()
+                            .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
+                            .setPreferredAudioLanguage("tr")
+                            .build()
+                    }
+                }
+                val targetTextPref = preferredTextLangOverride
+                if (!targetTextPref.isNullOrBlank() && targetTextPref != "OFF" && targetTextPref != "tr") {
+                    val matchingText = textOpts.firstOrNull {
+                        it.languageCode.equals(targetTextPref, ignoreCase = true)
+                    }
+                    if (matchingText == null) {
+                        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                            .buildUpon()
+                            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                            .setPreferredTextLanguage("tr")
+                            .build()
+                    }
+                }
             }
 
             override fun onPlayerError(error: PlaybackException) {
+                val current = activeChannel
+                if (current?.kind == MediaKind.LIVE && liveAutoRetryCount < 2 && current.url.isNotBlank()) {
+                    liveAutoRetryCount += 1
+                    playbackStatusLabel = "Yeniden deneniyor ($liveAutoRetryCount/2)..."
+                    playbackErrorMessage = null
+                    runCatching {
+                        exoPlayer.clearMediaItems()
+                        exoPlayer.setMediaItem(MediaItem.fromUri(current.url))
+                        exoPlayer.prepare()
+                        exoPlayer.playWhenReady = true
+                        isPlayingState = true
+                    }
+                    return
+                }
                 playbackStatusLabel = "Hata"
                 playbackErrorMessage = error.localizedMessage?.takeIf { it.isNotBlank() }
                     ?: "Yayın akışı açılamadı veya bağlantı kesildi."
@@ -710,16 +780,25 @@ private fun JoeApp() {
         runCatching {
             playbackErrorMessage = null
             showTrackSelectorDialog = false
+            liveAutoRetryCount = 0
             if (current != null && !target.isNullOrBlank()) {
                 playbackStatusLabel = "Yükleniyor..."
                 currentTracksState = Tracks.EMPTY
-                exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                val audioPref = preferredAudioLangOverride?.takeIf { it.isNotBlank() } ?: "tr"
+                val textPref = preferredTextLangOverride
+                val builder = exoPlayer.trackSelectionParameters
                     .buildUpon()
                     .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
                     .clearOverridesOfType(C.TRACK_TYPE_TEXT)
-                    .setPreferredAudioLanguage("tr")
-                    .setPreferredTextLanguage("tr")
-                    .build()
+                    .setPreferredAudioLanguage(audioPref)
+                if (textPref == "OFF") {
+                    builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                } else {
+                    builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                        .setPreferredTextLanguage(textPref?.takeIf { it.isNotBlank() } ?: "tr")
+                }
+                exoPlayer.trackSelectionParameters = builder.build()
+
                 val savedPos = recentWatches.firstOrNull {
                     it.channel.kind == current.kind &&
                         it.channel.id == current.id &&
@@ -1020,6 +1099,7 @@ private fun JoeApp() {
                             Surface(
                                 onClick = {
                                     runCatching {
+                                        preferredAudioLangOverride = opt.languageCode.ifBlank { "tr" }
                                         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
                                             .buildUpon()
                                             .clearOverridesOfType(C.TRACK_TYPE_AUDIO)
@@ -1088,6 +1168,7 @@ private fun JoeApp() {
                             Surface(
                                 onClick = {
                                     runCatching {
+                                        preferredTextLangOverride = "OFF"
                                         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
                                             .buildUpon()
                                             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
@@ -1129,6 +1210,7 @@ private fun JoeApp() {
                             Surface(
                                 onClick = {
                                     runCatching {
+                                        preferredTextLangOverride = opt.languageCode.ifBlank { "tr" }
                                         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
                                             .buildUpon()
                                             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
@@ -1299,6 +1381,11 @@ private fun JoeApp() {
             }
 
             if (showFullScreenOverlay) {
+                val trackBadge = remember(currentTracksState, exoPlayer.trackSelectionParameters) {
+                    val textDisabled = exoPlayer.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
+                    buildTrackBadgeText(currentTracksState, textDisabled)
+                }
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1382,7 +1469,7 @@ private fun JoeApp() {
                                 modifier = Modifier.size(16.dp)
                             )
                             Text(
-                                text = "Dil / Ses",
+                                text = "Dil / Ses ($trackBadge)",
                                 color = Color.White,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold,
