@@ -48,6 +48,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
@@ -149,22 +150,10 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v13"
+private const val PREFS_NAME = "joe_player_prefs_v14"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
-
-private fun defaultDemoChannels(): List<ChannelEntry> {
-    return listOf(
-        ChannelEntry(
-            id = "demo-live-1",
-            name = "Test Yayın 1 | FHD",
-            url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-            group = "Demo Kanallar",
-            kind = MediaKind.LIVE
-        )
-    )
-}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -238,20 +227,14 @@ private fun JoeApp() {
     var playlists by remember { mutableStateOf(savedSnapshot.playlists) }
     var recentWatches by remember { mutableStateOf(savedSnapshot.recentWatches) }
 
-    var allChannels by remember {
-        mutableStateOf(
-            if (savedSnapshot.channels.isNotEmpty()) {
-                savedSnapshot.channels
-            } else {
-                defaultDemoChannels()
-            }
-        )
-    }
+    var allChannels by remember { mutableStateOf(savedSnapshot.channels) }
 
     var activeChannel by remember { mutableStateOf<ChannelEntry?>(null) }
     var isPlayerFullScreen by remember { mutableStateOf(false) }
     var showFullScreenOverlay by remember { mutableStateOf(true) }
     var fillScreenAspect by remember { mutableStateOf(savedSnapshot.zoomToFillDefault) }
+    var playbackStatusLabel by remember { mutableStateOf("Hazır") }
+    var playbackErrorMessage by remember { mutableStateOf<String?>(null) }
 
     var selectedSeriesForEpisodes by remember { mutableStateOf<ChannelEntry?>(null) }
     var seriesEpisodes by remember { mutableStateOf<List<SeriesEpisodeItem>>(emptyList()) }
@@ -374,6 +357,23 @@ private fun JoeApp() {
         persistNow(recents = capped)
     }
 
+    fun retryCurrentPlayback() {
+        val current = activeChannel ?: return
+        val target = current.url
+        if (target.isBlank()) {
+            playbackErrorMessage = "Bu içerik için geçerli bir yayın bağlantısı bulunamadı."
+            return
+        }
+        runCatching {
+            playbackErrorMessage = null
+            playbackStatusLabel = "Yeniden bağlanılıyor..."
+            exoPlayer.setMediaItem(MediaItem.fromUri(target))
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+            isPlayingState = true
+        }
+    }
+
     fun deletePlaylist(targetPlaylist: SavedPlaylist) {
         val removedKeys = targetPlaylist.channels.map { "${it.kind.name}-${it.id}-${it.url}" }.toSet()
         val updatedChannels = allChannels.filter { "${it.kind.name}-${it.id}-${it.url}" !in removedKeys }
@@ -419,8 +419,34 @@ private fun JoeApp() {
 
     DisposableEffect(exoPlayer) {
         val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                playbackStatusLabel = when (playbackState) {
+                    Player.STATE_IDLE -> "Hazır"
+                    Player.STATE_BUFFERING -> "Yükleniyor..."
+                    Player.STATE_READY -> if (exoPlayer.isPlaying) "Oynatılıyor" else "Duraklatıldı"
+                    Player.STATE_ENDED -> "Tamamlandı"
+                    else -> "Hazır"
+                }
+                if (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING) {
+                    playbackErrorMessage = null
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                playbackStatusLabel = "Hata"
+                playbackErrorMessage = error.localizedMessage?.takeIf { it.isNotBlank() }
+                    ?: "Yayın akışı açılamadı veya bağlantı kesildi."
+                isPlayingState = false
+            }
+
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 isPlayingState = isPlaying
+                if (isPlaying) {
+                    playbackErrorMessage = null
+                    playbackStatusLabel = "Oynatılıyor"
+                } else if (exoPlayer.playbackState == Player.STATE_READY) {
+                    playbackStatusLabel = "Duraklatıldı"
+                }
                 val ch = activeChannel
                 if (ch != null && ch.url.isNotBlank()) {
                     val pos = runCatching { exoPlayer.currentPosition.coerceAtLeast(0L) }.getOrDefault(0L)
@@ -453,7 +479,9 @@ private fun JoeApp() {
         val current = activeChannel
         val target = current?.url
         runCatching {
+            playbackErrorMessage = null
             if (current != null && !target.isNullOrBlank()) {
+                playbackStatusLabel = "Yükleniyor..."
                 val savedPos = recentWatches.firstOrNull {
                     it.channel.kind == current.kind &&
                         it.channel.id == current.id &&
@@ -468,6 +496,7 @@ private fun JoeApp() {
                 exoPlayer.playWhenReady = autoPlayOnSelect
                 isPlayingState = autoPlayOnSelect
             } else {
+                playbackStatusLabel = "Hazır"
                 exoPlayer.stop()
                 isPlayingState = false
             }
@@ -638,8 +667,7 @@ private fun JoeApp() {
                         showResetAllDialog = false
                         activeChannel = null
                         isPlayerFullScreen = false
-                        val demos = defaultDemoChannels()
-                        allChannels = demos
+                        allChannels = emptyList()
                         playlists = emptyList()
                         recentWatches = emptyList()
                         xtreamNameInput = ""
@@ -674,6 +702,15 @@ private fun JoeApp() {
             val sameGroup = allChannels.filter { it.kind == currentCh.kind && it.group == currentCh.group }
             if (sameGroup.isNotEmpty()) sameGroup else allChannels.filter { it.kind == currentCh.kind }
         }
+        val currentIdxInGroup = sameCategoryChannels.indexOfFirst {
+            it.id == currentCh.id && it.kind == currentCh.kind
+        }
+        val prevChannel = if (currentIdxInGroup > 0) sameCategoryChannels[currentIdxInGroup - 1] else null
+        val nextChannel = if (currentIdxInGroup >= 0 && currentIdxInGroup < sameCategoryChannels.lastIndex) {
+            sameCategoryChannels[currentIdxInGroup + 1]
+        } else {
+            null
+        }
         val categoryRowState = rememberLazyListState()
 
         Box(
@@ -699,6 +736,60 @@ private fun JoeApp() {
                 },
                 modifier = Modifier.fillMaxSize()
             )
+
+            if (playbackErrorMessage != null) {
+                Surface(
+                    color = Color.Black.copy(alpha = 0.88f),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, AccentRed.copy(alpha = 0.6f)),
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = 24.dp)
+                        .widthIn(max = 420.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ErrorOutline,
+                            contentDescription = null,
+                            tint = AccentRed,
+                            modifier = Modifier.size(30.dp)
+                        )
+                        Text(
+                            text = "Oynatma Hatası",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = playbackErrorMessage!!,
+                            color = Color.LightGray,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Button(
+                                onClick = { retryCurrentPlayback() },
+                                colors = ButtonDefaults.buttonColors(containerColor = AccentRed)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Tekrar Dene")
+                            }
+                            if (nextChannel != null) {
+                                OutlinedButton(
+                                    onClick = { activeChannel = nextChannel }
+                                ) {
+                                    Text("Sonraki Yayın", color = Color.White)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             if (showFullScreenOverlay) {
                 Row(
@@ -735,11 +826,11 @@ private fun JoeApp() {
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 Surface(
-                                    color = AccentRed,
+                                    color = if (playbackErrorMessage != null) Color(0xFF8E1616) else AccentRed,
                                     shape = RoundedCornerShape(4.dp)
                                 ) {
                                     Text(
-                                        text = "İZLENİYOR",
+                                        text = playbackStatusLabel.uppercase(),
                                         color = Color.White,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
@@ -765,7 +856,39 @@ private fun JoeApp() {
                         }
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        IconButton(
+                            onClick = { prevChannel?.let { activeChannel = it } },
+                            enabled = prevChannel != null,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .background(
+                                    if (prevChannel != null) Color.White.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.05f),
+                                    CircleShape
+                                )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SkipPrevious,
+                                contentDescription = "Önceki Kanal",
+                                tint = if (prevChannel != null) Color.White else Color.Gray
+                            )
+                        }
+                        IconButton(
+                            onClick = { nextChannel?.let { activeChannel = it } },
+                            enabled = nextChannel != null,
+                            modifier = Modifier
+                                .size(38.dp)
+                                .background(
+                                    if (nextChannel != null) Color.White.copy(alpha = 0.14f) else Color.White.copy(alpha = 0.05f),
+                                    CircleShape
+                                )
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SkipNext,
+                                contentDescription = "Sonraki Kanal",
+                                tint = if (nextChannel != null) Color.White else Color.Gray
+                            )
+                        }
                         IconButton(
                             onClick = { fillScreenAspect = !fillScreenAspect },
                             modifier = Modifier
