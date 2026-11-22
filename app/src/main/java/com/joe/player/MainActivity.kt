@@ -44,11 +44,18 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 
+enum class MediaKind(val label: String) {
+    LIVE("Canlı TV"),
+    MOVIES("Filmler"),
+    SERIES("Diziler")
+}
+
 data class ChannelEntry(
     val id: String,
     val name: String,
     val url: String,
     val group: String = "Diğer",
+    val kind: MediaKind = MediaKind.LIVE,
     val isFavorite: Boolean = false
 )
 
@@ -60,7 +67,7 @@ data class SavedPlaylist(
 )
 
 private enum class BottomRoute(val label: String) {
-    LIVE_TV("Canlı TV"),
+    HOME("Ana Sayfa"),
     PLAYLISTS("Listelerim"),
     SETTINGS("Ayarlar")
 }
@@ -68,7 +75,7 @@ private enum class BottomRoute(val label: String) {
 private enum class ImportMode(val label: String) {
     URL("URL Liste"),
     FILE("Dosya Seç"),
-    SINGLE("Tek Kanal")
+    SINGLE("Tek İçerik")
 }
 
 private enum class SortOrder(val label: String) {
@@ -77,7 +84,6 @@ private enum class SortOrder(val label: String) {
     FAVORITES_FIRST("Önce Favoriler")
 }
 
-// Görseldeki renk paleti
 private val AccentOrange = Color(0xFFE66C2C)
 private val CardDarkBg = Color(0xFF2B2B2B)
 private val ChipDarkBg = Color(0xFF1F1F1F)
@@ -106,22 +112,33 @@ private fun JoeApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var currentRoute by remember { mutableStateOf(BottomRoute.LIVE_TV) }
+    var currentRoute by remember { mutableStateOf(BottomRoute.HOME) }
+    var selectedMediaKind by remember { mutableStateOf(MediaKind.LIVE) }
     var playlists by remember { mutableStateOf<List<SavedPlaylist>>(emptyList()) }
+
     var allChannels by remember {
         mutableStateOf(
             listOf(
                 ChannelEntry(
-                    id = "demo-1",
+                    id = "demo-live-1",
                     name = "Test Yayın 1 | FHD",
                     url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-                    group = "Demo Kanallar"
+                    group = "Demo Kanallar",
+                    kind = MediaKind.LIVE
                 ),
                 ChannelEntry(
-                    id = "demo-2",
-                    name = "Test Yayın 2 | 4K UHD",
+                    id = "demo-movie-1",
+                    name = "Big Buck Bunny (Demo Film)",
+                    url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+                    group = "Öne Çıkan Filmler",
+                    kind = MediaKind.MOVIES
+                ),
+                ChannelEntry(
+                    id = "demo-series-1",
+                    name = "Apple BipBop S01E01",
                     url = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8",
-                    group = "Demo Kanallar"
+                    group = "Demo Diziler",
+                    kind = MediaKind.SERIES
                 )
             )
         )
@@ -130,7 +147,7 @@ private fun JoeApp() {
     var activeChannel by remember { mutableStateOf<ChannelEntry?>(null) }
     var isPlayerFullScreen by remember { mutableStateOf(false) }
 
-    // Canlı TV Arama, Kategori ve Sıralama durumları
+    // Arama, Kategori ve Sıralama durumları
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategoryFilter by remember { mutableStateOf("Tümü") }
@@ -140,11 +157,12 @@ private fun JoeApp() {
 
     // Listelerim sekmesi durumları
     var importMode by remember { mutableStateOf(ImportMode.URL) }
+    var defaultImportKind by remember { mutableStateOf(MediaKind.LIVE) }
     var listNameInput by remember { mutableStateOf("") }
     var playlistUrlInput by remember { mutableStateOf("") }
     var singleChannelName by remember { mutableStateOf("") }
     var singleStreamUrl by remember { mutableStateOf("") }
-    var singleGroupName by remember { mutableStateOf("Spor") }
+    var singleGroupName by remember { mutableStateOf("Genel") }
 
     var autoPlayOnSelect by remember { mutableStateOf(true) }
     var statusText by remember { mutableStateOf<String?>(null) }
@@ -179,7 +197,7 @@ private fun JoeApp() {
         sourceInfo: String
     ) {
         if (newChannels.isEmpty()) {
-            statusText = "Geçerli kanal bulunamadı."
+            statusText = "Geçerli içerik bulunamadı."
             return
         }
         val existingUrls = allChannels.map { it.url }.toSet()
@@ -193,7 +211,7 @@ private fun JoeApp() {
             channels = newChannels
         )
         playlists = listOf(newPlaylist) + playlists
-        statusText = "${newChannels.size} kanal işlendi (${uniqueChannels.size} yeni eklendi)."
+        statusText = "${newChannels.size} içerik işlendi (${uniqueChannels.size} yeni eklendi)."
     }
 
     val m3uFileLauncher = rememberLauncherForActivityResult(
@@ -209,10 +227,15 @@ private fun JoeApp() {
                             BufferedReader(InputStreamReader(stream)).readText()
                         }.orEmpty()
                     }
-                    val parsed = parsePlaylistText(content, defaultGroup = "Diğer")
+                    val parsed = parsePlaylistText(
+                        rawText = content,
+                        defaultGroup = "Diğer",
+                        preferredKind = defaultImportKind
+                    )
                     val title = listNameInput.trim().ifEmpty { "Yerel Dosya Listesi" }
                     addImportedChannels(parsed, title, "Yerel .m3u / .m3u8 dosyası")
                     listNameInput = ""
+                    currentRoute = BottomRoute.HOME
                 } catch (e: Exception) {
                     statusText = "Dosya okunamadı: ${e.localizedMessage ?: "Hata"}"
                 } finally {
@@ -222,7 +245,6 @@ private fun JoeApp() {
         }
     }
 
-    // Tam ekran oynatıcı görünümü
     if (isPlayerFullScreen && activeChannel != null) {
         Box(
             modifier = Modifier
@@ -263,10 +285,10 @@ private fun JoeApp() {
                 contentColor = Color.White
             ) {
                 NavigationBarItem(
-                    selected = currentRoute == BottomRoute.LIVE_TV,
-                    onClick = { currentRoute = BottomRoute.LIVE_TV },
+                    selected = currentRoute == BottomRoute.HOME,
+                    onClick = { currentRoute = BottomRoute.HOME },
                     icon = { Icon(Icons.Default.LiveTv, contentDescription = null) },
-                    label = { Text("Canlı TV") },
+                    label = { Text("Ana Sayfa") },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = AccentOrange,
                         selectedTextColor = AccentOrange,
@@ -305,13 +327,23 @@ private fun JoeApp() {
         }
     ) { innerPadding ->
         when (currentRoute) {
-            BottomRoute.LIVE_TV -> {
-                val categories = remember(allChannels) {
-                    listOf("Tümü") + allChannels.map { it.group }.distinct()
+            BottomRoute.HOME -> {
+                val kindChannels = remember(allChannels, selectedMediaKind) {
+                    allChannels.filter { it.kind == selectedMediaKind }
                 }
 
-                val filteredAndSorted = remember(allChannels, searchQuery, selectedCategoryFilter, sortOrder) {
-                    val base = allChannels.filter { ch ->
+                val categories = remember(kindChannels) {
+                    listOf("Tümü") + kindChannels.map { it.group }.distinct()
+                }
+
+                LaunchedEffect(selectedMediaKind, categories) {
+                    if (selectedCategoryFilter !in categories) {
+                        selectedCategoryFilter = "Tümü"
+                    }
+                }
+
+                val filteredAndSorted = remember(kindChannels, searchQuery, selectedCategoryFilter, sortOrder) {
+                    val base = kindChannels.filter { ch ->
                         val matchesCat = selectedCategoryFilter == "Tümü" || ch.group == selectedCategoryFilter
                         val matchesQuery = searchQuery.isBlank() ||
                             ch.name.contains(searchQuery, ignoreCase = true) ||
@@ -334,12 +366,45 @@ private fun JoeApp() {
                         .fillMaxSize()
                         .padding(innerPadding)
                 ) {
-                    // Üst Araç Çubuğu: Arama ikonu + Kategori + Düzenle hap butonları
+                    // Üst Medya Modu Seçici: Canlı TV | Filmler | Diziler
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .background(Color.White)
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        MediaKind.entries.forEach { kind ->
+                            val isSelected = selectedMediaKind == kind
+                            val count = allChannels.count { it.kind == kind }
+                            FilterChip(
+                                selected = isSelected,
+                                onClick = {
+                                    selectedMediaKind = kind
+                                    selectedCategoryFilter = "Tümü"
+                                },
+                                label = {
+                                    Text(
+                                        text = "${kind.label} ($count)",
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = AccentOrange,
+                                    selectedLabelColor = Color.White
+                                )
+                            )
+                        }
+                    }
+
+                    // Üst Araç Çubuğu: Arama + Kategori + Düzenle
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.White)
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
@@ -362,13 +427,12 @@ private fun JoeApp() {
                             OutlinedTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
-                                placeholder = { Text("Kanal ara...") },
+                                placeholder = { Text("${selectedMediaKind.label} içinde ara...") },
                                 singleLine = true,
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(24.dp)
                             )
                         } else {
-                            // Kategori Butonu
                             Box {
                                 Surface(
                                     onClick = { showCategoryMenu = true },
@@ -413,7 +477,6 @@ private fun JoeApp() {
                                 }
                             }
 
-                            // Düzenle (Sıralama) Butonu
                             Box {
                                 Surface(
                                     onClick = { showSortMenu = true },
@@ -458,7 +521,8 @@ private fun JoeApp() {
                         }
                     }
 
-                    // Aktif yayın varsa üstte mini oynatıcı şeridi
+                    HorizontalDivider(color = Color(0xFFE6E6E6))
+
                     if (activeChannel != null) {
                         Box(
                             modifier = Modifier
@@ -501,14 +565,13 @@ private fun JoeApp() {
                         }
                     }
 
-                    // Kategori Rafları ve Yatay Kanal Kartları
                     if (groupedChannels.isEmpty()) {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "Kanal bulunamadı. Listelerim sekmesinden M3U yükleyebilirsiniz.",
+                                text = "${selectedMediaKind.label} bölümünde içerik bulunamadı. Listelerim sekmesinden liste ekleyebilirsiniz.",
                                 color = Color.DarkGray,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier.padding(24.dp)
@@ -521,12 +584,11 @@ private fun JoeApp() {
                             verticalArrangement = Arrangement.spacedBy(20.dp)
                         ) {
                             groupedChannels.forEach { (categoryName, channelList) ->
-                                item(key = categoryName) {
+                                item(key = "${selectedMediaKind.name}-$categoryName") {
                                     Column(
                                         modifier = Modifier.fillMaxWidth(),
                                         verticalArrangement = Arrangement.spacedBy(10.dp)
                                     ) {
-                                        // Kategori Başlığı
                                         Text(
                                             text = categoryName,
                                             fontSize = 20.sp,
@@ -535,13 +597,12 @@ private fun JoeApp() {
                                             modifier = Modifier.padding(horizontal = 16.dp)
                                         )
 
-                                        // Yatay Kaydırılabilir Kanal Kartları
                                         LazyRow(
                                             contentPadding = PaddingValues(horizontal = 16.dp),
                                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                                         ) {
                                             items(channelList, key = { it.id }) { channel ->
-                                                LiveTvChannelCard(
+                                                MediaShelfCard(
                                                     channel = channel,
                                                     isSelected = activeChannel?.id == channel.id,
                                                     onClick = { activeChannel = channel },
@@ -588,7 +649,7 @@ private fun JoeApp() {
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 Text(
-                                    text = "Yeni Liste Ekle (M3U / M3U8)",
+                                    text = "Yeni Liste / İçerik Ekle",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold
                                 )
@@ -605,6 +666,25 @@ private fun JoeApp() {
                                                 statusText = null
                                             },
                                             label = { Text(mode.label, maxLines = 1) }
+                                        )
+                                    }
+                                }
+
+                                // Varsayılan tür seçici (Otomatik algılama + Canlı/Film/Dizi)
+                                Text(
+                                    text = "Hedef Bölüm (Otomatik veya Seçili)",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = Color.DarkGray
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    MediaKind.entries.forEach { kind ->
+                                        FilterChip(
+                                            selected = defaultImportKind == kind,
+                                            onClick = { defaultImportKind = kind },
+                                            label = { Text(kind.label, maxLines = 1, fontSize = 12.sp) }
                                         )
                                     }
                                 }
@@ -638,7 +718,11 @@ private fun JoeApp() {
                                                         val raw = withContext(Dispatchers.IO) {
                                                             downloadPlaylist(urlToLoad)
                                                         }
-                                                        val parsed = parsePlaylistText(raw, defaultGroup = "Diğer")
+                                                        val parsed = parsePlaylistText(
+                                                            rawText = raw,
+                                                            defaultGroup = "Diğer",
+                                                            preferredKind = defaultImportKind
+                                                        )
                                                         addImportedChannels(
                                                             newChannels = parsed,
                                                             playlistTitle = listNameInput.trim().ifEmpty { "URL Listesi" },
@@ -646,7 +730,8 @@ private fun JoeApp() {
                                                         )
                                                         listNameInput = ""
                                                         playlistUrlInput = ""
-                                                        currentRoute = BottomRoute.LIVE_TV
+                                                        selectedMediaKind = defaultImportKind
+                                                        currentRoute = BottomRoute.HOME
                                                     } catch (e: Exception) {
                                                         statusText = "Yüklenemedi: ${e.localizedMessage ?: "Bağlantı hatası"}"
                                                     } finally {
@@ -685,14 +770,14 @@ private fun JoeApp() {
                                         OutlinedTextField(
                                             value = singleChannelName,
                                             onValueChange = { singleChannelName = it },
-                                            label = { Text("Kanal Adı") },
+                                            label = { Text("İçerik / Kanal Adı") },
                                             singleLine = true,
                                             modifier = Modifier.fillMaxWidth()
                                         )
                                         OutlinedTextField(
                                             value = singleStreamUrl,
                                             onValueChange = { singleStreamUrl = it },
-                                            label = { Text("Yayın Bağlantısı (.m3u8 / Akış URL)") },
+                                            label = { Text("Yayın Bağlantısı (.m3u8 / MP4 / Akış)") },
                                             singleLine = true,
                                             modifier = Modifier.fillMaxWidth()
                                         )
@@ -706,23 +791,25 @@ private fun JoeApp() {
                                         Button(
                                             onClick = {
                                                 val cleanUrl = singleStreamUrl.trim()
-                                                val cleanName = singleChannelName.trim().ifEmpty { "Özel Kanal" }
-                                                val cleanGroup = singleGroupName.trim().ifEmpty { "Diğer" }
+                                                val cleanName = singleChannelName.trim().ifEmpty { "Özel İçerik" }
+                                                val cleanGroup = singleGroupName.trim().ifEmpty { "Genel" }
                                                 val singleItem = ChannelEntry(
                                                     id = "single-${System.currentTimeMillis()}",
                                                     name = cleanName,
                                                     url = cleanUrl,
-                                                    group = cleanGroup
+                                                    group = cleanGroup,
+                                                    kind = defaultImportKind
                                                 )
                                                 activeChannel = singleItem
                                                 addImportedChannels(
                                                     newChannels = listOf(singleItem),
                                                     playlistTitle = cleanName,
-                                                    sourceInfo = "Tekil Yayın Bağlantısı"
+                                                    sourceInfo = "Tekil Yayın (${defaultImportKind.label})"
                                                 )
                                                 singleChannelName = ""
                                                 singleStreamUrl = ""
-                                                currentRoute = BottomRoute.LIVE_TV
+                                                selectedMediaKind = defaultImportKind
+                                                currentRoute = BottomRoute.HOME
                                             },
                                             enabled = !isLoading && singleStreamUrl.isNotBlank(),
                                             colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
@@ -732,7 +819,7 @@ private fun JoeApp() {
                                         ) {
                                             Icon(Icons.Default.Add, contentDescription = null)
                                             Spacer(modifier = Modifier.width(8.dp))
-                                            Text("Kanalı Ekle")
+                                            Text("İçeriği Ekle")
                                         }
                                     }
                                 }
@@ -759,13 +846,13 @@ private fun JoeApp() {
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { currentRoute = BottomRoute.LIVE_TV },
+                                .clickable { currentRoute = BottomRoute.HOME },
                             colors = CardDefaults.cardColors(containerColor = Color.White)
                         ) {
                             Column(modifier = Modifier.padding(14.dp)) {
                                 Text(pl.title, fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    text = "${pl.channels.size} kanal • ${pl.sourceInfo}",
+                                    text = "${pl.channels.size} içerik • ${pl.sourceInfo}",
                                     style = MaterialTheme.typography.bodySmall,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -801,7 +888,7 @@ private fun JoeApp() {
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("Kanal seçilince otomatik oynat")
+                            Text("İçerik seçilince otomatik oynat")
                             Switch(
                                 checked = autoPlayOnSelect,
                                 onCheckedChange = { autoPlayOnSelect = it }
@@ -815,12 +902,18 @@ private fun JoeApp() {
 }
 
 @Composable
-private fun LiveTvChannelCard(
+private fun MediaShelfCard(
     channel: ChannelEntry,
     isSelected: Boolean,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit
 ) {
+    val shelfIcon = when (channel.kind) {
+        MediaKind.LIVE -> Icons.Default.LiveTv
+        MediaKind.MOVIES -> Icons.Default.Movie
+        MediaKind.SERIES -> Icons.Default.Tv
+    }
+
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
@@ -834,7 +927,6 @@ private fun LiveTvChannelCard(
             .height(118.dp)
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            // Sağ üst Favori Kalp Butonu
             IconButton(
                 onClick = onToggleFavorite,
                 modifier = Modifier
@@ -849,7 +941,6 @@ private fun LiveTvChannelCard(
                 )
             }
 
-            // Orta Logo Kutusu ve Alt Kanal İsmi
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -867,7 +958,7 @@ private fun LiveTvChannelCard(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.LiveTv,
+                        imageVector = shelfIcon,
                         contentDescription = null,
                         tint = Color.LightGray,
                         modifier = Modifier.size(24.dp)
@@ -889,6 +980,19 @@ private fun LiveTvChannelCard(
     }
 }
 
+private fun detectMediaKind(group: String, title: String, fallback: MediaKind): MediaKind {
+    val combined = "${group.lowercase()} ${title.lowercase()}"
+    val seriesKeywords = listOf("dizi", "series", "sezon", "season", "bölüm", "episode", "s01", "s02", "s03", "e01")
+    if (seriesKeywords.any { combined.contains(it) }) {
+        return MediaKind.SERIES
+    }
+    val movieKeywords = listOf("film", "movie", "movies", "sinema", "vod", "4k film", "hd film")
+    if (movieKeywords.any { combined.contains(it) }) {
+        return MediaKind.MOVIES
+    }
+    return fallback
+}
+
 private fun downloadPlaylist(urlString: String): String {
     val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
         connectTimeout = 15000
@@ -903,7 +1007,11 @@ private fun downloadPlaylist(urlString: String): String {
     }
 }
 
-private fun parsePlaylistText(rawText: String, defaultGroup: String): List<ChannelEntry> {
+private fun parsePlaylistText(
+    rawText: String,
+    defaultGroup: String,
+    preferredKind: MediaKind
+): List<ChannelEntry> {
     val lines = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() }
     val items = mutableListOf<ChannelEntry>()
     var nextTitle: String? = null
@@ -920,13 +1028,19 @@ private fun parsePlaylistText(rawText: String, defaultGroup: String): List<Chann
                 null
             }
         } else if (!line.startsWith("#")) {
-            val resolvedName = nextTitle ?: line.substringAfterLast('/').substringBefore('?').ifBlank { "Kanal" }
+            val resolvedName = nextTitle ?: line.substringAfterLast('/').substringBefore('?').ifBlank { "İçerik" }
+            val resolvedKind = detectMediaKind(
+                group = nextGroup,
+                title = resolvedName,
+                fallback = preferredKind
+            )
             items.add(
                 ChannelEntry(
-                    id = "ch-${items.size}-${line.hashCode()}",
+                    id = "item-${items.size}-${line.hashCode()}",
                     name = resolvedName,
                     url = line,
-                    group = nextGroup
+                    group = nextGroup,
+                    kind = resolvedKind
                 )
             )
             nextTitle = null
