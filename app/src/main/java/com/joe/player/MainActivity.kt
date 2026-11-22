@@ -28,6 +28,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -39,10 +41,13 @@ import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 
 enum class MediaKind(val label: String) {
     LIVE("Canlı TV"),
@@ -50,13 +55,29 @@ enum class MediaKind(val label: String) {
     SERIES("Diziler")
 }
 
+data class XtreamCredentials(
+    val serverUrl: String,
+    val username: String,
+    val password: String
+)
+
 data class ChannelEntry(
     val id: String,
     val name: String,
     val url: String,
     val group: String = "Diğer",
     val kind: MediaKind = MediaKind.LIVE,
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    val xtreamSeriesId: String? = null,
+    val xtreamCreds: XtreamCredentials? = null
+)
+
+data class SeriesEpisodeItem(
+    val id: String,
+    val season: Int,
+    val episodeNum: Int,
+    val title: String,
+    val streamUrl: String
 )
 
 data class SavedPlaylist(
@@ -73,9 +94,10 @@ private enum class BottomRoute(val label: String) {
 }
 
 private enum class ImportMode(val label: String) {
-    URL("URL Liste"),
-    FILE("Dosya Seç"),
-    SINGLE("Tek İçerik")
+    XTREAM("Xtream"),
+    URL("URL"),
+    FILE("Dosya"),
+    SINGLE("Tekli")
 }
 
 private enum class SortOrder(val label: String) {
@@ -112,7 +134,7 @@ private fun JoeApp() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var currentRoute by remember { mutableStateOf(BottomRoute.HOME) }
+    var currentRoute by remember { mutableStateOf(BottomRoute.PLAYLISTS) }
     var selectedMediaKind by remember { mutableStateOf(MediaKind.LIVE) }
     var playlists by remember { mutableStateOf<List<SavedPlaylist>>(emptyList()) }
 
@@ -125,20 +147,6 @@ private fun JoeApp() {
                     url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
                     group = "Demo Kanallar",
                     kind = MediaKind.LIVE
-                ),
-                ChannelEntry(
-                    id = "demo-movie-1",
-                    name = "Big Buck Bunny (Demo Film)",
-                    url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-                    group = "Öne Çıkan Filmler",
-                    kind = MediaKind.MOVIES
-                ),
-                ChannelEntry(
-                    id = "demo-series-1",
-                    name = "Apple BipBop S01E01",
-                    url = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8",
-                    group = "Demo Diziler",
-                    kind = MediaKind.SERIES
                 )
             )
         )
@@ -146,6 +154,12 @@ private fun JoeApp() {
 
     var activeChannel by remember { mutableStateOf<ChannelEntry?>(null) }
     var isPlayerFullScreen by remember { mutableStateOf(false) }
+
+    // Xtream Dizi Bölüm Seçici Dialog durumları
+    var selectedSeriesForEpisodes by remember { mutableStateOf<ChannelEntry?>(null) }
+    var seriesEpisodes by remember { mutableStateOf<List<SeriesEpisodeItem>>(emptyList()) }
+    var isFetchingEpisodes by remember { mutableStateOf(false) }
+    var episodeErrorText by remember { mutableStateOf<String?>(null) }
 
     // Arama, Kategori ve Sıralama durumları
     var isSearchActive by remember { mutableStateOf(false) }
@@ -156,9 +170,17 @@ private fun JoeApp() {
     var showSortMenu by remember { mutableStateOf(false) }
 
     // Listelerim sekmesi durumları
-    var importMode by remember { mutableStateOf(ImportMode.URL) }
+    var importMode by remember { mutableStateOf(ImportMode.XTREAM) }
     var defaultImportKind by remember { mutableStateOf(MediaKind.LIVE) }
     var listNameInput by remember { mutableStateOf("") }
+
+    // Xtream alanları
+    var xtreamServerInput by remember { mutableStateOf("") }
+    var xtreamUserInput by remember { mutableStateOf("") }
+    var xtreamPassInput by remember { mutableStateOf("") }
+    var showXtreamPassword by remember { mutableStateOf(false) }
+
+    // URL ve Tekli alanlar
     var playlistUrlInput by remember { mutableStateOf("") }
     var singleChannelName by remember { mutableStateOf("") }
     var singleStreamUrl by remember { mutableStateOf("") }
@@ -200,8 +222,8 @@ private fun JoeApp() {
             statusText = "Geçerli içerik bulunamadı."
             return
         }
-        val existingUrls = allChannels.map { it.url }.toSet()
-        val uniqueChannels = newChannels.filter { it.url !in existingUrls }
+        val existingKeys = allChannels.map { "${it.kind.name}-${it.id}-${it.url}" }.toSet()
+        val uniqueChannels = newChannels.filter { "${it.kind.name}-${it.id}-${it.url}" !in existingKeys }
         allChannels = uniqueChannels + allChannels
 
         val newPlaylist = SavedPlaylist(
@@ -211,7 +233,35 @@ private fun JoeApp() {
             channels = newChannels
         )
         playlists = listOf(newPlaylist) + playlists
-        statusText = "${newChannels.size} içerik işlendi (${uniqueChannels.size} yeni eklendi)."
+        val liveCount = newChannels.count { it.kind == MediaKind.LIVE }
+        val movieCount = newChannels.count { it.kind == MediaKind.MOVIES }
+        val seriesCount = newChannels.count { it.kind == MediaKind.SERIES }
+        statusText = "Yüklendi: $liveCount Canlı TV, $movieCount Film, $seriesCount Dizi"
+    }
+
+    fun handleCardClick(item: ChannelEntry) {
+        if (item.kind == MediaKind.SERIES && item.xtreamSeriesId != null && item.xtreamCreds != null) {
+            selectedSeriesForEpisodes = item
+            seriesEpisodes = emptyList()
+            episodeErrorText = null
+            scope.launch {
+                isFetchingEpisodes = true
+                try {
+                    seriesEpisodes = withContext(Dispatchers.IO) {
+                        fetchXtreamSeriesEpisodes(item.xtreamCreds, item.xtreamSeriesId)
+                    }
+                    if (seriesEpisodes.isEmpty()) {
+                        episodeErrorText = "Bu dizi için bölüm bulunamadı."
+                    }
+                } catch (e: Exception) {
+                    episodeErrorText = "Bölümler alınamadı: ${e.localizedMessage ?: "Bağlantı hatası"}"
+                } finally {
+                    isFetchingEpisodes = false
+                }
+            }
+        } else {
+            activeChannel = item
+        }
     }
 
     val m3uFileLauncher = rememberLauncherForActivityResult(
@@ -275,6 +325,91 @@ private fun JoeApp() {
             }
         }
         return
+    }
+
+    // Xtream Dizi Bölüm Seçici Dialog
+    if (selectedSeriesForEpisodes != null) {
+        val seriesItem = selectedSeriesForEpisodes!!
+        AlertDialog(
+            onDismissRequest = { selectedSeriesForEpisodes = null },
+            title = {
+                Text(
+                    text = seriesItem.name,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp, max = 360.dp)
+                ) {
+                    when {
+                        isFetchingEpisodes -> {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                CircularProgressIndicator(color = AccentOrange)
+                                Text("Sezon ve bölümler yükleniyor...")
+                            }
+                        }
+
+                        episodeErrorText != null -> {
+                            Text(episodeErrorText!!, color = MaterialTheme.colorScheme.error)
+                        }
+
+                        else -> {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                items(seriesEpisodes, key = { it.id }) { ep ->
+                                    Surface(
+                                        onClick = {
+                                            activeChannel = ChannelEntry(
+                                                id = "ep-${ep.id}",
+                                                name = "${seriesItem.name} - S${ep.season}E${ep.episodeNum}: ${ep.title}",
+                                                url = ep.streamUrl,
+                                                group = seriesItem.group,
+                                                kind = MediaKind.SERIES
+                                            )
+                                            selectedSeriesForEpisodes = null
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Color(0xFFF2F2F2),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.PlayArrow,
+                                                contentDescription = null,
+                                                tint = AccentOrange
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                text = "Sezon ${ep.season} • Bölüm ${ep.episodeNum} - ${ep.title}",
+                                                fontSize = 13.sp,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selectedSeriesForEpisodes = null }) {
+                    Text("Kapat", color = AccentOrange)
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -571,7 +706,7 @@ private fun JoeApp() {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "${selectedMediaKind.label} bölümünde içerik bulunamadı. Listelerim sekmesinden liste ekleyebilirsiniz.",
+                                text = "${selectedMediaKind.label} bölümünde içerik bulunamadı. Listelerim sekmesinden Xtream veya M3U ekleyebilirsiniz.",
                                 color = Color.DarkGray,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier.padding(24.dp)
@@ -605,7 +740,7 @@ private fun JoeApp() {
                                                 MediaShelfCard(
                                                     channel = channel,
                                                     isSelected = activeChannel?.id == channel.id,
-                                                    onClick = { activeChannel = channel },
+                                                    onClick = { handleCardClick(channel) },
                                                     onToggleFavorite = { toggleFavorite(channel.id) }
                                                 )
                                             }
@@ -649,14 +784,14 @@ private fun JoeApp() {
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 Text(
-                                    text = "Yeni Liste / İçerik Ekle",
+                                    text = "Yeni Liste / Hesap Ekle",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold
                                 )
 
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     ImportMode.entries.forEach { mode ->
                                         FilterChip(
@@ -665,26 +800,7 @@ private fun JoeApp() {
                                                 importMode = mode
                                                 statusText = null
                                             },
-                                            label = { Text(mode.label, maxLines = 1) }
-                                        )
-                                    }
-                                }
-
-                                // Varsayılan tür seçici (Otomatik algılama + Canlı/Film/Dizi)
-                                Text(
-                                    text = "Hedef Bölüm (Otomatik veya Seçili)",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = Color.DarkGray
-                                )
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    MediaKind.entries.forEach { kind ->
-                                        FilterChip(
-                                            selected = defaultImportKind == kind,
-                                            onClick = { defaultImportKind = kind },
-                                            label = { Text(kind.label, maxLines = 1, fontSize = 12.sp) }
+                                            label = { Text(mode.label, maxLines = 1, fontSize = 12.sp) }
                                         )
                                     }
                                 }
@@ -693,13 +809,120 @@ private fun JoeApp() {
                                     OutlinedTextField(
                                         value = listNameInput,
                                         onValueChange = { listNameInput = it },
-                                        label = { Text("Liste Adı (İsteğe bağlı)") },
+                                        label = { Text("Liste / Hesap Adı (İsteğe bağlı)") },
                                         singleLine = true,
                                         modifier = Modifier.fillMaxWidth()
                                     )
                                 }
 
+                                // Xtream kendi kategorilerini otomatik ayırır; diğer modlar için hedef bölüm seçici
+                                if (importMode != ImportMode.XTREAM) {
+                                    Text(
+                                        text = "Hedef Bölüm (Otomatik veya Seçili)",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = Color.DarkGray
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        MediaKind.entries.forEach { kind ->
+                                            FilterChip(
+                                                selected = defaultImportKind == kind,
+                                                onClick = { defaultImportKind = kind },
+                                                label = { Text(kind.label, maxLines = 1, fontSize = 12.sp) }
+                                            )
+                                        }
+                                    }
+                                }
+
                                 when (importMode) {
+                                    ImportMode.XTREAM -> {
+                                        OutlinedTextField(
+                                            value = xtreamServerInput,
+                                            onValueChange = { xtreamServerInput = it },
+                                            label = { Text("Sunucu Adresi (http://ornek.com:8080)") },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        OutlinedTextField(
+                                            value = xtreamUserInput,
+                                            onValueChange = { xtreamUserInput = it },
+                                            label = { Text("Kullanıcı Adı") },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        OutlinedTextField(
+                                            value = xtreamPassInput,
+                                            onValueChange = { xtreamPassInput = it },
+                                            label = { Text("Şifre") },
+                                            singleLine = true,
+                                            visualTransformation = if (showXtreamPassword) {
+                                                VisualTransformation.None
+                                            } else {
+                                                PasswordVisualTransformation()
+                                            },
+                                            trailingIcon = {
+                                                IconButton(onClick = { showXtreamPassword = !showXtreamPassword }) {
+                                                    Icon(
+                                                        imageVector = if (showXtreamPassword) {
+                                                            Icons.Default.VisibilityOff
+                                                        } else {
+                                                            Icons.Default.Visibility
+                                                        },
+                                                        contentDescription = "Şifre Göster"
+                                                    )
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Button(
+                                            onClick = {
+                                                val creds = XtreamCredentials(
+                                                    serverUrl = normalizeServerUrl(xtreamServerInput),
+                                                    username = xtreamUserInput.trim(),
+                                                    password = xtreamPassInput.trim()
+                                                )
+                                                scope.launch {
+                                                    isLoading = true
+                                                    statusText = "Canlı TV, Filmler ve Diziler çekiliyor..."
+                                                    try {
+                                                        val imported = withContext(Dispatchers.IO) {
+                                                            fetchAllXtreamMedia(creds)
+                                                        }
+                                                        val title = listNameInput.trim().ifEmpty {
+                                                            "Xtream (${creds.username})"
+                                                        }
+                                                        addImportedChannels(
+                                                            newChannels = imported,
+                                                            playlistTitle = title,
+                                                            sourceInfo = creds.serverUrl
+                                                        )
+                                                        listNameInput = ""
+                                                        selectedMediaKind = MediaKind.LIVE
+                                                        currentRoute = BottomRoute.HOME
+                                                    } catch (e: Exception) {
+                                                        statusText = "Xtream girişi başarısız: ${e.localizedMessage ?: "Bağlantı veya hesap hatası"}"
+                                                    } finally {
+                                                        isLoading = false
+                                                    }
+                                                }
+                                            },
+                                            enabled = !isLoading &&
+                                                xtreamServerInput.isNotBlank() &&
+                                                xtreamUserInput.isNotBlank() &&
+                                                xtreamPassInput.isNotBlank(),
+                                            colors = ButtonDefaults.buttonColors(containerColor = AccentOrange),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(48.dp)
+                                        ) {
+                                            Icon(Icons.Default.Login, contentDescription = null)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("Xtream Bağlan ve Çek")
+                                        }
+                                    }
+
                                     ImportMode.URL -> {
                                         OutlinedTextField(
                                             value = playlistUrlInput,
@@ -716,7 +939,7 @@ private fun JoeApp() {
                                                     statusText = null
                                                     try {
                                                         val raw = withContext(Dispatchers.IO) {
-                                                            downloadPlaylist(urlToLoad)
+                                                            downloadText(urlToLoad)
                                                         }
                                                         val parsed = parsePlaylistText(
                                                             rawText = raw,
@@ -980,6 +1203,175 @@ private fun MediaShelfCard(
     }
 }
 
+private fun normalizeServerUrl(raw: String): String {
+    var trimmed = raw.trim().trimEnd('/')
+    if (!trimmed.startsWith("http://", ignoreCase = true) &&
+        !trimmed.startsWith("https://", ignoreCase = true)
+    ) {
+        trimmed = "http://$trimmed"
+    }
+    return trimmed
+}
+
+private fun buildPlayerApiUrl(creds: XtreamCredentials, action: String? = null, extra: String = ""): String {
+    val u = URLEncoder.encode(creds.username, "UTF-8")
+    val p = URLEncoder.encode(creds.password, "UTF-8")
+    val base = "${creds.serverUrl}/player_api.php?username=$u&password=$p"
+    return if (action.isNullOrBlank()) base else "$base&action=$action$extra"
+}
+
+private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
+    // 1. Kimlik doğrulama kontrolü
+    val authJson = JSONObject(downloadText(buildPlayerApiUrl(creds)))
+    val userInfo = authJson.optJSONObject("user_info")
+    val authStatus = userInfo?.optInt("auth", 0) ?: 0
+    if (authStatus == 0) {
+        throw IllegalStateException("Kullanıcı adı veya şifre geçersiz.")
+    }
+
+    val results = mutableListOf<ChannelEntry>()
+
+    // 2. Canlı TV Kategorileri ve Kanalları
+    val liveCatMap = parseCategoryMap(safeDownload(buildPlayerApiUrl(creds, "get_live_categories")))
+    val liveArray = JSONArray(safeDownload(buildPlayerApiUrl(creds, "get_live_streams"), "[]"))
+    for (i in 0 until liveArray.length()) {
+        val obj = liveArray.optJSONObject(i) ?: continue
+        val streamId = obj.optString("stream_id").ifBlank { obj.optInt("stream_id").toString() }
+        val name = obj.optString("name", "Canlı Kanal").trim()
+        val catId = obj.optString("category_id")
+        val group = liveCatMap[catId] ?: "Canlı TV"
+        val streamUrl = "${creds.serverUrl}/live/${creds.username}/${creds.password}/$streamId.m3u8"
+        results.add(
+            ChannelEntry(
+                id = "xt-live-$streamId",
+                name = name,
+                url = streamUrl,
+                group = group,
+                kind = MediaKind.LIVE
+            )
+        )
+    }
+
+    // 3. Filmler (VOD) Kategorileri ve Akışları
+    val vodCatMap = parseCategoryMap(safeDownload(buildPlayerApiUrl(creds, "get_vod_categories")))
+    val vodArray = JSONArray(safeDownload(buildPlayerApiUrl(creds, "get_vod_streams"), "[]"))
+    for (i in 0 until vodArray.length()) {
+        val obj = vodArray.optJSONObject(i) ?: continue
+        val streamId = obj.optString("stream_id").ifBlank { obj.optInt("stream_id").toString() }
+        val name = obj.optString("name", "Film").trim()
+        val catId = obj.optString("category_id")
+        val ext = obj.optString("container_extension", "mp4").ifBlank { "mp4" }
+        val group = vodCatMap[catId] ?: "Filmler"
+        val movieUrl = "${creds.serverUrl}/movie/${creds.username}/${creds.password}/$streamId.$ext"
+        results.add(
+            ChannelEntry(
+                id = "xt-vod-$streamId",
+                name = name,
+                url = movieUrl,
+                group = group,
+                kind = MediaKind.MOVIES
+            )
+        )
+    }
+
+    // 4. Diziler Kategorileri ve Dizi Listesi
+    val seriesCatMap = parseCategoryMap(safeDownload(buildPlayerApiUrl(creds, "get_series_categories")))
+    val seriesArray = JSONArray(safeDownload(buildPlayerApiUrl(creds, "get_series"), "[]"))
+    for (i in 0 until seriesArray.length()) {
+        val obj = seriesArray.optJSONObject(i) ?: continue
+        val seriesId = obj.optString("series_id").ifBlank { obj.optInt("series_id").toString() }
+        val name = obj.optString("name", "Dizi").trim()
+        val catId = obj.optString("category_id")
+        val group = seriesCatMap[catId] ?: "Diziler"
+        results.add(
+            ChannelEntry(
+                id = "xt-series-$seriesId",
+                name = name,
+                url = "",
+                group = group,
+                kind = MediaKind.SERIES,
+                xtreamSeriesId = seriesId,
+                xtreamCreds = creds
+            )
+        )
+    }
+
+    return results
+}
+
+private fun fetchXtreamSeriesEpisodes(creds: XtreamCredentials, seriesId: String): List<SeriesEpisodeItem> {
+    val raw = downloadText(buildPlayerApiUrl(creds, "get_series_info", "&series_id=$seriesId"))
+    val root = JSONObject(raw)
+    val episodesObj = root.optJSONObject("episodes") ?: return emptyList()
+    val list = mutableListOf<SeriesEpisodeItem>()
+
+    val seasonKeys = episodesObj.keys()
+    while (seasonKeys.hasNext()) {
+        val seasonKey = seasonKeys.next()
+        val seasonNum = seasonKey.toIntOrNull() ?: 1
+        val epArray = episodesObj.optJSONArray(seasonKey) ?: continue
+        for (i in 0 until epArray.length()) {
+            val epObj = epArray.optJSONObject(i) ?: continue
+            val epId = epObj.optString("id")
+            if (epId.isBlank()) continue
+            val epNum = epObj.optInt("episode_num", i + 1)
+            val title = epObj.optString("title", "Bölüm $epNum").trim()
+            val ext = epObj.optString("container_extension", "mp4").ifBlank { "mp4" }
+            val epUrl = "${creds.serverUrl}/series/${creds.username}/${creds.password}/$epId.$ext"
+            list.add(
+                SeriesEpisodeItem(
+                    id = epId,
+                    season = seasonNum,
+                    episodeNum = epNum,
+                    title = title,
+                    streamUrl = epUrl
+                )
+            )
+        }
+    }
+    return list.sortedWith(compareBy({ it.season }, { it.episodeNum }))
+}
+
+private fun parseCategoryMap(rawJson: String): Map<String, String> {
+    val map = mutableMapOf<String, String>()
+    val arr = try {
+        JSONArray(rawJson)
+    } catch (_: Exception) {
+        return map
+    }
+    for (i in 0 until arr.length()) {
+        val obj = arr.optJSONObject(i) ?: continue
+        val id = obj.optString("category_id")
+        val name = obj.optString("category_name")
+        if (id.isNotBlank() && name.isNotBlank()) {
+            map[id] = name
+        }
+    }
+    return map
+}
+
+private fun safeDownload(url: String, fallback: String = "[]"): String {
+    return try {
+        downloadText(url)
+    } catch (_: Exception) {
+        fallback
+    }
+}
+
+private fun downloadText(urlString: String): String {
+    val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
+        connectTimeout = 15000
+        readTimeout = 20000
+        requestMethod = "GET"
+        setRequestProperty("User-Agent", "JOE-Player/1.0")
+    }
+    return try {
+        conn.inputStream.bufferedReader().use { it.readText() }
+    } finally {
+        conn.disconnect()
+    }
+}
+
 private fun detectMediaKind(group: String, title: String, fallback: MediaKind): MediaKind {
     val combined = "${group.lowercase()} ${title.lowercase()}"
     val seriesKeywords = listOf("dizi", "series", "sezon", "season", "bölüm", "episode", "s01", "s02", "s03", "e01")
@@ -991,20 +1383,6 @@ private fun detectMediaKind(group: String, title: String, fallback: MediaKind): 
         return MediaKind.MOVIES
     }
     return fallback
-}
-
-private fun downloadPlaylist(urlString: String): String {
-    val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 15000
-        readTimeout = 15000
-        requestMethod = "GET"
-        setRequestProperty("User-Agent", "JOE-Player/1.0")
-    }
-    return try {
-        conn.inputStream.bufferedReader().use { it.readText() }
-    } finally {
-        conn.disconnect()
-    }
 }
 
 private fun parsePlaylistText(
