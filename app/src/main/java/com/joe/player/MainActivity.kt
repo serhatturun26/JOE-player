@@ -141,7 +141,7 @@ private val AccentOrange = Color(0xFFE66C2C)
 private val CardDarkBg = Color(0xFF2B2B2B)
 private val ChipDarkBg = Color(0xFF1F1F1F)
 private val LightPageBg = Color(0xFFF7F7F7)
-private const val PREFS_NAME = "joe_player_prefs_v8"
+private const val PREFS_NAME = "joe_player_prefs_v7"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 
@@ -1308,6 +1308,33 @@ private fun JoeApp() {
                         }
                     }
 
+                    if (isLoading) {
+                        item {
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth(),
+                                color = AccentOrange
+                            )
+                        }
+                    }
+
+                    if (statusText != null) {
+                        item {
+                            Surface(
+                                color = AccentOrange.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = statusText!!,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = AccentOrange,
+                                    modifier = Modifier.padding(12.dp)
+                                )
+                            }
+                        }
+                    }
+
                     items(SourceSection.entries, key = { it.name }) { section ->
                         val isExpanded = expandedSection == section
                         Card(
@@ -1445,7 +1472,7 @@ private fun JoeApp() {
                                                             val hdrs = currentHeaders()
                                                             scope.launch {
                                                                 isLoading = true
-                                                                statusText = "M3U8 indiriliyor..."
+                                                                statusText = null
                                                                 try {
                                                                     val raw = withContext(Dispatchers.IO) {
                                                                         downloadText(url, hdrs)
@@ -1509,7 +1536,7 @@ private fun JoeApp() {
                                                             val hdrs = currentHeaders()
                                                             scope.launch {
                                                                 isLoading = true
-                                                                statusText = "JSON indiriliyor..."
+                                                                statusText = null
                                                                 try {
                                                                     val raw = withContext(Dispatchers.IO) {
                                                                         downloadText(url, hdrs)
@@ -1573,7 +1600,7 @@ private fun JoeApp() {
                                                             val hdrs = currentHeaders()
                                                             scope.launch {
                                                                 isLoading = true
-                                                                statusText = "HTML sayfa taranıyor..."
+                                                                statusText = null
                                                                 try {
                                                                     val raw = withContext(Dispatchers.IO) {
                                                                         downloadText(url, hdrs)
@@ -1789,7 +1816,7 @@ private fun JoeApp() {
                                                             val hdrs = currentHeaders()
                                                             scope.launch {
                                                                 isLoading = true
-                                                                statusText = "mHub eklentisi indiriliyor..."
+                                                                statusText = null
                                                                 try {
                                                                     val raw = withContext(Dispatchers.IO) {
                                                                         downloadText(url, hdrs)
@@ -1878,29 +1905,6 @@ private fun JoeApp() {
                                                     Spacer(modifier = Modifier.width(8.dp))
                                                     Text("GitHub Listelerini Çek")
                                                 }
-                                            }
-                                        }
-
-                                        if (isLoading) {
-                                            LinearProgressIndicator(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                color = AccentOrange
-                                            )
-                                        }
-
-                                        if (statusText != null) {
-                                            Surface(
-                                                color = AccentOrange.copy(alpha = 0.12f),
-                                                shape = RoundedCornerShape(8.dp),
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                Text(
-                                                    text = statusText!!,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    fontWeight = FontWeight.Medium,
-                                                    color = AccentOrange,
-                                                    modifier = Modifier.padding(10.dp)
-                                                )
                                             }
                                         }
                                     }
@@ -2309,6 +2313,25 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) 
     }
 }
 
+private fun channelsToJsonArray(list: List<ChannelEntry>): JSONArray {
+    val arr = JSONArray()
+    list.forEach { ch ->
+        arr.put(
+            JSONObject().apply {
+                put("id", ch.id)
+                put("name", ch.name)
+                put("url", ch.url)
+                put("group", ch.group)
+                put("kind", ch.kind.name)
+                put("posterUrl", ch.posterUrl ?: "")
+                put("isFavorite", ch.isFavorite)
+                put("xtreamSeriesId", ch.xtreamSeriesId ?: "")
+            }
+        )
+    }
+    return arr
+}
+
 private fun JSONObject.optAnyString(key: String, default: String = ""): String {
     if (!has(key) || isNull(key)) return default
     val raw = opt(key) ?: return default
@@ -2596,45 +2619,280 @@ private fun fetchGithubLists(
     headers: CustomHeadersConfig,
     preferredKind: MediaKind
 ): List<ChannelEntry> {
-    val clean = inputUrl.trim().removePrefix("https://").removePrefix("http://")
-    if (!clean.contains("/") && !clean.contains(".")) {
-        throw IllegalStateException("Geçerli bir GitHub URL veya kullanıcı/repo girin (örnek: kullanıcı/repo).")
+    val clean = inputUrl.trim().trimEnd('/')
+    if (clean.isEmpty()) {
+        throw IllegalArgumentException("GitHub adresi veya repo adı girin.")
     }
 
-    val rawUrl = when {
-        inputUrl.startsWith("http://", true) || inputUrl.startsWith("https://", true) -> {
-            if (inputUrl.contains("github.com/") && inputUrl.contains("/blob/")) {
-                inputUrl.replace("github.com/", "raw.githubusercontent.com/").replace("/blob/", "/")
-            } else if (inputUrl.contains("github.com/") && !inputUrl.contains("raw.githubusercontent.com")) {
-                val parts = clean.split("/").filter { it.isNotBlank() }
-                if (parts.size >= 3) {
-                    "https://raw.githubusercontent.com/${parts[1]}/${parts[2]}/main/playlist.m3u8"
-                } else {
-                    inputUrl
-                }
+    val normalizedUrl = when {
+        clean.startsWith("http://", ignoreCase = true) || clean.startsWith("https://", ignoreCase = true) -> clean
+        clean.contains("/") -> "https://github.com/$clean"
+        else -> {
+            val searchRaw = runCatching {
+                downloadText(
+                    "https://api.github.com/search/repositories?q=${URLEncoder.encode(clean, "UTF-8")}&per_page=1",
+                    headers
+                )
+            }.getOrNull()
+            val fullName = searchRaw?.let {
+                runCatching {
+                    JSONObject(it).optJSONArray("items")?.optJSONObject(0)?.optString("full_name")
+                }.getOrNull()
+            }
+            if (!fullName.isNullOrBlank()) {
+                "https://github.com/$fullName"
             } else {
-                inputUrl
+                "https://github.com/$clean/$clean"
             }
         }
-        clean.contains("raw.githubusercontent.com") -> "https://$clean"
-        clean.contains("github.com/") -> {
-            val parts = clean.split("/").filter { it.isNotBlank() }
-            if (parts.size >= 3) {
-                "https://raw.githubusercontent.com/${parts[1]}/${parts[2]}/main/playlist.m3u8"
-            } else {
-                "https://$clean"
-            }
+    }
+
+    if (normalizedUrl.contains("raw.githubusercontent.com", ignoreCase = true)) {
+        val content = downloadText(normalizedUrl, headers)
+        return parseGithubFileContent(normalizedUrl, content, preferredKind)
+    }
+
+    if (normalizedUrl.contains("github.com/", ignoreCase = true) && normalizedUrl.contains("/blob/")) {
+        val rawUrl = normalizedUrl
+            .replace("github.com/", "raw.githubusercontent.com/")
+            .replace("/blob/", "/")
+        val content = downloadText(rawUrl, headers)
+        return parseGithubFileContent(rawUrl, content, preferredKind)
+    }
+
+    val repoPath = normalizedUrl
+        .removePrefix("https://github.com/")
+        .removePrefix("http://github.com/")
+        .substringBefore("/tree/")
+        .trim('/')
+    val parts = repoPath.split("/").filter { it.isNotBlank() }
+    if (parts.size < 2) {
+        val content = downloadText(normalizedUrl, headers)
+        return parseGithubFileContent(normalizedUrl, content, preferredKind)
+    }
+
+    val owner = parts[0]
+    val repo = parts[1]
+    val treeApiUrl = "https://api.github.com/repos/$owner/$repo/git/trees/HEAD?recursive=1"
+    val treeJson = JSONObject(downloadText(treeApiUrl, headers))
+    val treeArr = treeJson.optJSONArray("tree") ?: JSONArray()
+
+    val playlistPaths = mutableListOf<String>()
+    for (i in 0 until treeArr.length()) {
+        val item = treeArr.optJSONObject(i) ?: continue
+        val type = item.optString("type")
+        val path = item.optString("path")
+        if (type == "blob" && (
+                path.endsWith(".m3u8", true) ||
+                    path.endsWith(".m3u", true) ||
+                    path.endsWith(".json", true) ||
+                    path.endsWith(".html", true)
+                )
+        ) {
+            playlistPaths.add(path)
+        }
+    }
+
+    if (playlistPaths.isEmpty()) {
+        throw IllegalStateException("Bu depoda (.m3u, .m3u8, .json, .html) liste dosyası bulunamadı.")
+    }
+
+    val branch = treeJson.optString("default_branch").ifBlank {
+        runCatching {
+            JSONObject(downloadText("https://api.github.com/repos/$owner/$repo", headers))
+                .optString("default_branch")
+        }.getOrNull().orEmpty().ifBlank { "main" }
+    }
+
+    val collected = mutableListOf<ChannelEntry>()
+    for (path in playlistPaths.take(15)) {
+        val rawFileUrl = "https://raw.githubusercontent.com/$owner/$repo/$branch/$path"
+        val body = runCatching { downloadText(rawFileUrl, headers) }.getOrNull() ?: continue
+        val fileName = path.substringAfterLast('/')
+        collected.addAll(parseGithubFileContent(rawFileUrl, body, preferredKind, fileName))
+    }
+
+    if (collected.isEmpty()) {
+        throw IllegalStateException("GitHub liste dosyaları okunamadı.")
+    }
+    return collected
+}
+
+private fun parseGithubFileContent(
+    sourceUrl: String,
+    content: String,
+    preferredKind: MediaKind,
+    groupLabel: String = "GitHub Liste"
+): List<ChannelEntry> {
+    val trimmed = content.trim()
+    return when {
+        sourceUrl.endsWith(".json", true) || trimmed.startsWith("{") || trimmed.startsWith("[") -> {
+            parseJsonPlaylist(content, groupLabel, preferredKind)
+        }
+        sourceUrl.endsWith(".html", true) || trimmed.contains("<html", true) -> {
+            parseHtmlStreams(content, sourceUrl, groupLabel, preferredKind)
         }
         else -> {
-            val parts = clean.split("/").filter { it.isNotBlank() }
-            if (parts.size >= 2) {
-                "https://raw.githubusercontent.com/${parts[0]}/${parts[1]}/main/playlist.m3u8"
-            } else {
-                throw IllegalStateException("Eksik GitHub adresi: tam URL veya kullanıcı/repo yazın.")
-            }
+            parsePlaylistText(content, groupLabel, preferredKind)
         }
     }
+}
 
-    val content = downloadText(rawUrl, headers)
-    return when {
-        rawUrl.endsWith(".json", true) || content.trim().startsWith("{") || content.trim().startsWith("[") -> {
+private fun parseJsonArrayFlexible(raw: String): JSONArray {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return JSONArray()
+    if (trimmed.startsWith("[")) {
+        return try {
+            JSONArray(trimmed)
+        } catch (_: Exception) {
+            JSONArray()
+        }
+    }
+    if (trimmed.startsWith("{")) {
+        return try {
+            val obj = JSONObject(trimmed)
+            val arr = JSONArray()
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val itemObj = obj.optJSONObject(keys.next())
+                if (itemObj != null) arr.put(itemObj)
+            }
+            arr
+        } catch (_: Exception) {
+            JSONArray()
+        }
+    }
+    return JSONArray()
+}
+
+private fun parseCategoryMap(rawJson: String): Map<String, String> {
+    val map = mutableMapOf<String, String>()
+    val arr = parseJsonArrayFlexible(rawJson)
+    for (i in 0 until arr.length()) {
+        val obj = arr.optJSONObject(i) ?: continue
+        val id = obj.optAnyString("category_id")
+        val name = obj.optAnyString("category_name")
+        if (id.isNotBlank() && name.isNotBlank()) {
+            map[id] = name
+        }
+    }
+    return map
+}
+
+private fun safeDownload(
+    url: String,
+    headers: CustomHeadersConfig,
+    fallback: String = "[]"
+): String {
+    return try {
+        downloadText(url, headers)
+    } catch (_: Exception) {
+        fallback
+    }
+}
+
+private fun downloadText(
+    urlString: String,
+    headers: CustomHeadersConfig = CustomHeadersConfig()
+): String {
+    var currentUrl = urlString
+    var redirects = 0
+    while (redirects < 5) {
+        val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 20000
+            readTimeout = 30000
+            requestMethod = "GET"
+            instanceFollowRedirects = false
+            setRequestProperty(
+                "User-Agent",
+                headers.userAgent.ifBlank { DEFAULT_USER_AGENT }
+            )
+            if (headers.referer.isNotBlank()) {
+                setRequestProperty("Referer", headers.referer)
+            }
+            if (headers.origin.isNotBlank()) {
+                setRequestProperty("Origin", headers.origin)
+            }
+            setRequestProperty("Accept", "application/json, text/plain, text/html, */*")
+        }
+        try {
+            val code = conn.responseCode
+            if (code in 300..399) {
+                val location = conn.getHeaderField("Location") ?: break
+                currentUrl = URL(URL(currentUrl), location).toString()
+                redirects++
+                continue
+            }
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) {
+                throw IllegalStateException("HTTP $code yanıtı alındı")
+            }
+            return body
+        } finally {
+            conn.disconnect()
+        }
+    }
+    throw IllegalStateException("Çok fazla yönlendirme (redirect) yapıldı")
+}
+
+private fun detectMediaKind(group: String, title: String, fallback: MediaKind): MediaKind {
+    val combined = "${group.lowercase()} ${title.lowercase()}"
+    val seriesKeywords = listOf("dizi", "series", "sezon", "season", "bölüm", "episode", "s01", "s02", "s03", "e01")
+    if (seriesKeywords.any { combined.contains(it) }) {
+        return MediaKind.SERIES
+    }
+    val movieKeywords = listOf("film", "movie", "movies", "sinema", "vod", "4k film", "hd film")
+    if (movieKeywords.any { combined.contains(it) }) {
+        return MediaKind.MOVIES
+    }
+    return fallback
+}
+
+private fun parsePlaylistText(
+    rawText: String,
+    defaultGroup: String,
+    preferredKind: MediaKind
+): List<ChannelEntry> {
+    val lines = rawText.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    val items = mutableListOf<ChannelEntry>()
+    var nextTitle: String? = null
+    var nextGroup = defaultGroup
+    var nextLogo: String? = null
+
+    for (line in lines) {
+        if (line.startsWith("#EXTINF:", ignoreCase = true)) {
+            val groupRegex = Regex("""group-title="([^"]*)"""", RegexOption.IGNORE_CASE).find(line)
+            nextGroup = groupRegex?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() } ?: defaultGroup
+            val logoRegex = Regex("""tvg-logo="([^"]*)"""", RegexOption.IGNORE_CASE).find(line)
+            nextLogo = logoRegex?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
+            val commaIdx = line.lastIndexOf(',')
+            nextTitle = if (commaIdx != -1 && commaIdx + 1 < line.length) {
+                line.substring(commaIdx + 1).trim()
+            } else {
+                null
+            }
+        } else if (!line.startsWith("#")) {
+            val resolvedName = nextTitle ?: line.substringAfterLast('/').substringBefore('?').ifBlank { "İçerik" }
+            val resolvedKind = detectMediaKind(
+                group = nextGroup,
+                title = resolvedName,
+                fallback = preferredKind
+            )
+            items.add(
+                ChannelEntry(
+                    id = "item-${items.size}-${line.hashCode()}",
+                    name = resolvedName,
+                    url = line,
+                    group = nextGroup,
+                    kind = resolvedKind,
+                    posterUrl = nextLogo
+                )
+            )
+            nextTitle = null
+            nextGroup = defaultGroup
+            nextLogo = null
+        }
+    }
+    return items
+}
