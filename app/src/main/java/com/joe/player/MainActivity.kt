@@ -46,9 +46,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
-import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -125,7 +123,7 @@ private val AccentOrange = Color(0xFFE66C2C)
 private val CardDarkBg = Color(0xFF2B2B2B)
 private val ChipDarkBg = Color(0xFF1F1F1F)
 private val LightPageBg = Color(0xFFF7F7F7)
-private const val PREFS_NAME = "joe_player_prefs"
+private const val PREFS_NAME = "joe_player_prefs_v2"
 private const val KEY_STATE_JSON = "saved_state_json"
 
 class MainActivity : ComponentActivity() {
@@ -147,20 +145,34 @@ class MainActivity : ComponentActivity() {
 
 private fun applyFullScreenSystemBars(activity: ComponentActivity?, fullScreen: Boolean) {
     val act = activity ?: return
-    val window = act.window
-    val controller = WindowCompat.getInsetsController(window, window.decorView)
-    if (fullScreen) {
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        controller.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        controller.hide(WindowInsetsCompat.Type.systemBars())
-    } else {
-        WindowCompat.setDecorFitsSystemWindows(window, true)
-        controller.show(WindowInsetsCompat.Type.systemBars())
+    runCatching {
+        val window = act.window
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        if (fullScreen) {
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            controller.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            WindowCompat.setDecorFitsSystemWindows(window, true)
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
     }
 }
 
-@androidx.annotation.OptIn(UnstableApi::class)
+private fun applyPlayerResizeMode(playerView: PlayerView, zoomToFill: Boolean) {
+    runCatching {
+        val aspectLayout = playerView.videoSurfaceView?.parent as? android.widget.FrameLayout
+        if (aspectLayout != null) {
+            val clazz = aspectLayout.javaClass
+            val setModeMethod = clazz.getMethod("setResizeMode", Int::class.javaPrimitiveType)
+            // AspectRatioFrameLayout.RESIZE_MODE_FIT = 0, RESIZE_MODE_ZOOM = 3
+            val modeValue = if (zoomToFill) 3 else 0
+            setModeMethod.invoke(aspectLayout, modeValue)
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun JoeApp() {
@@ -230,6 +242,8 @@ private fun JoeApp() {
     var statusText by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
 
+    val exoPlayer = remember { ExoPlayer.Builder(context).build() }
+
     LaunchedEffect(allChannels, playlists, xtreamServerInput, xtreamUserInput, xtreamPassInput, listNameInput, autoPlayOnSelect) {
         val currentXtream = if (xtreamServerInput.isNotBlank() || xtreamUserInput.isNotBlank() || xtreamPassInput.isNotBlank()) {
             XtreamCredentials(
@@ -254,10 +268,12 @@ private fun JoeApp() {
 
     LaunchedEffect(isPlayerFullScreen, activeChannel) {
         val effectiveFullScreen = isPlayerFullScreen && activeChannel != null
-        activity?.requestedOrientation = if (effectiveFullScreen) {
-            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        } else {
-            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        runCatching {
+            activity?.requestedOrientation = if (effectiveFullScreen) {
+                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            } else {
+                ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
         }
         applyFullScreenSystemBars(activity, effectiveFullScreen)
         if (effectiveFullScreen) {
@@ -273,26 +289,26 @@ private fun JoeApp() {
         }
     }
 
-    val exoPlayer = remember { ExoPlayer.Builder(context).build() }
-
     DisposableEffect(exoPlayer) {
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        runCatching { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
         applyFullScreenSystemBars(activity, false)
         onDispose {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            runCatching { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
             applyFullScreenSystemBars(activity, false)
-            exoPlayer.release()
+            runCatching { exoPlayer.release() }
         }
     }
 
     LaunchedEffect(activeChannel?.url, autoPlayOnSelect) {
         val target = activeChannel?.url
-        if (!target.isNullOrBlank()) {
-            exoPlayer.setMediaItem(MediaItem.fromUri(target))
-            exoPlayer.prepare()
-            exoPlayer.playWhenReady = autoPlayOnSelect
-        } else {
-            exoPlayer.stop()
+        runCatching {
+            if (!target.isNullOrBlank()) {
+                exoPlayer.setMediaItem(MediaItem.fromUri(target))
+                exoPlayer.prepare()
+                exoPlayer.playWhenReady = autoPlayOnSelect
+            } else {
+                exoPlayer.stop()
+            }
         }
     }
 
@@ -387,7 +403,6 @@ private fun JoeApp() {
         }
     }
 
-    // Tam Ekran Oynatıcı + Aynı Kategorideki Kanallar Overlay
     if (isPlayerFullScreen && activeChannel != null) {
         val currentCh = activeChannel!!
         val sameCategoryChannels = remember(allChannels, currentCh.kind, currentCh.group) {
@@ -399,37 +414,26 @@ private fun JoeApp() {
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .clickable(
-                    onClick = {
-                        showFullScreenOverlay = !showFullScreenOverlay
-                        if (showFullScreenOverlay) overlayTriggerKey++
-                    }
-                )
+                .clickable {
+                    showFullScreenOverlay = !showFullScreenOverlay
+                    if (showFullScreenOverlay) overlayTriggerKey++
+                }
         ) {
             AndroidView(
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         player = exoPlayer
                         useController = false
-                        resizeMode = if (fillScreenAspect) {
-                            AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                        } else {
-                            AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        }
+                        applyPlayerResizeMode(this, fillScreenAspect)
                     }
                 },
                 update = { view ->
-                    view.resizeMode = if (fillScreenAspect) {
-                        AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                    } else {
-                        AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    }
+                    applyPlayerResizeMode(view, fillScreenAspect)
                 },
                 modifier = Modifier.fillMaxSize()
             )
 
             if (showFullScreenOverlay) {
-                // Üst Bar: Geri, Şu Anki Kanal Bilgisi ve En/Boy Oranı Butonu
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -512,7 +516,9 @@ private fun JoeApp() {
                         }
                         IconButton(
                             onClick = {
-                                if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                                runCatching {
+                                    if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                                }
                                 overlayTriggerKey++
                             },
                             modifier = Modifier
@@ -528,7 +534,6 @@ private fun JoeApp() {
                     }
                 }
 
-                // Alt Bar: Aynı Kategorideki Kanallar (Oynatıcıyı Kapatmadan Hızlı Geçiş)
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -641,7 +646,6 @@ private fun JoeApp() {
         return
     }
 
-    // Xtream Dizi Bölüm Seçici Dialog
     if (selectedSeriesForEpisodes != null) {
         val seriesItem = selectedSeriesForEpisodes!!
         AlertDialog(
@@ -1546,9 +1550,9 @@ private data class PersistentSnapshot(
 )
 
 private fun loadPersistentState(context: Context): PersistentSnapshot {
-    return try {
+    return runCatching {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val raw = prefs.getString(KEY_STATE_JSON, null) ?: return PersistentSnapshot()
+        val raw = prefs.getString(KEY_STATE_JSON, null) ?: return@runCatching PersistentSnapshot()
         val root = JSONObject(raw)
 
         val xtreamObj = root.optJSONObject("xtream")
@@ -1588,9 +1592,7 @@ private fun loadPersistentState(context: Context): PersistentSnapshot {
             lastListName = root.optString("lastListName", ""),
             autoPlay = root.optBoolean("autoPlay", true)
         )
-    } catch (_: Exception) {
-        PersistentSnapshot()
-    }
+    }.getOrDefault(PersistentSnapshot())
 }
 
 private fun parseChannelsArray(arr: JSONArray, fallbackXtream: XtreamCredentials?): List<ChannelEntry> {
@@ -1619,7 +1621,7 @@ private fun parseChannelsArray(arr: JSONArray, fallbackXtream: XtreamCredentials
 }
 
 private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) {
-    try {
+    runCatching {
         val root = JSONObject()
         root.put("lastListName", snapshot.lastListName)
         root.put("autoPlay", snapshot.autoPlay)
@@ -1654,7 +1656,6 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) 
             .edit()
             .putString(KEY_STATE_JSON, root.toString())
             .apply()
-    } catch (_: Exception) {
     }
 }
 
