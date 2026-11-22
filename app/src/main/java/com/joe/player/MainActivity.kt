@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -46,7 +47,6 @@ import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -204,7 +204,6 @@ private fun JoeApp() {
     var isPlayerFullScreen by remember { mutableStateOf(false) }
     var showFullScreenOverlay by remember { mutableStateOf(true) }
     var fillScreenAspect by remember { mutableStateOf(true) }
-    var overlayTriggerKey by remember { mutableIntStateOf(0) }
 
     var selectedSeriesForEpisodes by remember { mutableStateOf<ChannelEntry?>(null) }
     var seriesEpisodes by remember { mutableStateOf<List<SeriesEpisodeItem>>(emptyList()) }
@@ -276,14 +275,6 @@ private fun JoeApp() {
         applyFullScreenSystemBars(activity, effectiveFullScreen)
         if (effectiveFullScreen) {
             showFullScreenOverlay = true
-            overlayTriggerKey++
-        }
-    }
-
-    LaunchedEffect(showFullScreenOverlay, overlayTriggerKey, isPlayerFullScreen) {
-        if (isPlayerFullScreen && showFullScreenOverlay) {
-            delay(5000L)
-            showFullScreenOverlay = false
         }
     }
 
@@ -372,7 +363,6 @@ private fun JoeApp() {
             activeChannel = item
             isPlayerFullScreen = true
             showFullScreenOverlay = true
-            overlayTriggerKey++
         }
     }
 
@@ -413,6 +403,7 @@ private fun JoeApp() {
             val sameGroup = allChannels.filter { it.kind == currentCh.kind && it.group == currentCh.group }
             if (sameGroup.isNotEmpty()) sameGroup else allChannels.filter { it.kind == currentCh.kind }
         }
+        val categoryRowState = rememberLazyListState()
 
         Box(
             modifier = Modifier
@@ -420,7 +411,6 @@ private fun JoeApp() {
                 .background(Color.Black)
                 .clickable {
                     showFullScreenOverlay = !showFullScreenOverlay
-                    if (showFullScreenOverlay) overlayTriggerKey++
                 }
         ) {
             AndroidView(
@@ -442,7 +432,7 @@ private fun JoeApp() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.TopCenter)
-                        .background(Color.Black.copy(alpha = 0.72f))
+                        .background(Color.Black.copy(alpha = 0.78f))
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -504,10 +494,7 @@ private fun JoeApp() {
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         IconButton(
-                            onClick = {
-                                fillScreenAspect = !fillScreenAspect
-                                overlayTriggerKey++
-                            },
+                            onClick = { fillScreenAspect = !fillScreenAspect },
                             modifier = Modifier
                                 .size(38.dp)
                                 .background(Color.White.copy(alpha = 0.14f), CircleShape)
@@ -523,7 +510,6 @@ private fun JoeApp() {
                                 runCatching {
                                     if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
                                 }
-                                overlayTriggerKey++
                             },
                             modifier = Modifier
                                 .size(38.dp)
@@ -542,19 +528,35 @@ private fun JoeApp() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.BottomCenter)
-                        .background(Color.Black.copy(alpha = 0.82f))
+                        .background(Color.Black.copy(alpha = 0.85f))
                         .padding(vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = "${currentCh.group} (${sameCategoryChannels.size} kanal)",
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(horizontal = 16.dp)
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${currentCh.group} (${sameCategoryChannels.size} kanal)",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "Gizlemek için ekrana dokunun",
+                            color = Color.LightGray,
+                            fontSize = 11.sp
+                        )
+                    }
 
                     LazyRow(
+                        state = categoryRowState,
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
@@ -571,7 +573,6 @@ private fun JoeApp() {
                                         handleCardClick(ch)
                                     } else {
                                         activeChannel = ch
-                                        overlayTriggerKey++
                                     }
                                 },
                                 shape = RoundedCornerShape(10.dp),
