@@ -2,8 +2,10 @@ package com.joe.player
 
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
+import android.widget.ImageView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -118,7 +120,7 @@ private val AccentOrange = Color(0xFFE66C2C)
 private val CardDarkBg = Color(0xFF2B2B2B)
 private val ChipDarkBg = Color(0xFF1F1F1F)
 private val LightPageBg = Color(0xFFF7F7F7)
-private const val PREFS_NAME = "joe_player_prefs_v4"
+private const val PREFS_NAME = "joe_player_prefs_v5"
 private const val KEY_STATE_JSON = "saved_state_json"
 
 class MainActivity : ComponentActivity() {
@@ -334,9 +336,9 @@ private fun JoeApp() {
             id = "pl-${System.currentTimeMillis()}-${playlists.size}",
             title = playlistTitle.ifBlank { "Liste ${playlists.size + 1}" },
             sourceInfo = sourceInfo,
-            channels = newChannels.take(100)
+            channels = newChannels
         )
-        val mergedPlaylists = listOf(newPlaylist) + playlists.take(6)
+        val mergedPlaylists = listOf(newPlaylist) + playlists
         playlists = mergedPlaylists
 
         val liveCount = newChannels.count { it.kind == MediaKind.LIVE }
@@ -409,8 +411,7 @@ private fun JoeApp() {
         val currentCh = activeChannel!!
         val sameCategoryChannels = remember(allChannels, currentCh.kind, currentCh.group) {
             val sameGroup = allChannels.filter { it.kind == currentCh.kind && it.group == currentCh.group }
-            val pool = if (sameGroup.isNotEmpty()) sameGroup else allChannels.filter { it.kind == currentCh.kind }
-            pool.take(100)
+            if (sameGroup.isNotEmpty()) sameGroup else allChannels.filter { it.kind == currentCh.kind }
         }
 
         Box(
@@ -1031,7 +1032,6 @@ private fun JoeApp() {
                                 items = categoryEntries,
                                 key = { entry -> "${selectedMediaKind.name}-${entry.key}" }
                             ) { (categoryName, channelList) ->
-                                val visibleList = remember(channelList) { channelList.take(250) }
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -1049,7 +1049,7 @@ private fun JoeApp() {
                                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {
                                         items(
-                                            items = visibleList,
+                                            items = channelList,
                                             key = { ch -> "${ch.kind.name}-${ch.id}" }
                                         ) { channel ->
                                             MediaShelfCard(
@@ -1452,6 +1452,10 @@ private fun MediaShelfCard(
         MediaKind.SERIES -> Icons.Default.Tv
     }
 
+    val posterUrl = channel.posterUrl?.trim()?.takeIf {
+        it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true)
+    }
+
     Surface(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
@@ -1490,7 +1494,7 @@ private fun MediaShelfCard(
 
                 Box(
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(46.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(Color(0xFF1A1A1A)),
                     contentAlignment = Alignment.Center
@@ -1501,6 +1505,34 @@ private fun MediaShelfCard(
                         tint = if (isSelected) AccentOrange else Color.LightGray,
                         modifier = Modifier.size(22.dp)
                     )
+
+                    if (posterUrl != null) {
+                        AndroidView(
+                            factory = { ctx ->
+                                ImageView(ctx).apply {
+                                    scaleType = ImageView.ScaleType.CENTER_CROP
+                                }
+                            },
+                            update = { iv ->
+                                iv.setImageDrawable(null)
+                                iv.tag = posterUrl
+                                iv.post {
+                                    if (iv.tag != posterUrl) return@post
+                                    Thread {
+                                        val bmp = runCatching { downloadBitmapSafe(posterUrl) }.getOrNull()
+                                        if (bmp != null) {
+                                            iv.post {
+                                                if (iv.tag == posterUrl) {
+                                                    iv.setImageBitmap(bmp)
+                                                }
+                                            }
+                                        }
+                                    }.start()
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
 
                 Text(
@@ -1516,6 +1548,39 @@ private fun MediaShelfCard(
             }
         }
     }
+}
+
+private fun downloadBitmapSafe(imageUrl: String): android.graphics.Bitmap? {
+    var currentUrl = imageUrl
+    var redirects = 0
+    while (redirects < 3) {
+        val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 3500
+            readTimeout = 4500
+            requestMethod = "GET"
+            instanceFollowRedirects = false
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0")
+        }
+        try {
+            val code = conn.responseCode
+            if (code in 300..399) {
+                val loc = conn.getHeaderField("Location") ?: break
+                currentUrl = URL(URL(currentUrl), loc).toString()
+                redirects++
+                continue
+            }
+            if (code !in 200..299) return null
+            val bytes = conn.inputStream.use { it.readBytes() }
+            if (bytes.isEmpty() || bytes.size > 2_000_000) return null
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = 4
+            }
+            return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+        } finally {
+            conn.disconnect()
+        }
+    }
+    return null
 }
 
 private data class PersistentSnapshot(
@@ -1614,16 +1679,16 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) 
             )
         }
 
-        root.put("channels", channelsToJsonArray(snapshot.channels.take(600)))
+        root.put("channels", channelsToJsonArray(snapshot.channels))
 
         val plArr = JSONArray()
-        snapshot.playlists.take(6).forEach { pl ->
+        snapshot.playlists.forEach { pl ->
             plArr.put(
                 JSONObject().apply {
                     put("id", pl.id)
                     put("title", pl.title)
                     put("sourceInfo", pl.sourceInfo)
-                    put("channels", channelsToJsonArray(pl.channels.take(150)))
+                    put("channels", channelsToJsonArray(pl.channels))
                 }
             )
         }
@@ -1632,7 +1697,7 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) 
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putString(KEY_STATE_JSON, root.toString())
-            .commit()
+            .apply()
     }
 }
 
@@ -1653,6 +1718,13 @@ private fun channelsToJsonArray(list: List<ChannelEntry>): JSONArray {
         )
     }
     return arr
+}
+
+private fun JSONObject.optAnyString(key: String, default: String = ""): String {
+    if (!has(key) || isNull(key)) return default
+    val raw = opt(key) ?: return default
+    val str = raw.toString().trim()
+    return if (str.isEmpty() || str.equals("null", ignoreCase = true)) default else str
 }
 
 private fun normalizeServerUrl(raw: String): String {
@@ -1687,11 +1759,11 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
     val liveArray = JSONArray(safeDownload(buildPlayerApiUrl(creds, "get_live_streams"), "[]"))
     for (i in 0 until liveArray.length()) {
         val obj = liveArray.optJSONObject(i) ?: continue
-        val streamId = obj.optString("stream_id").ifBlank { obj.optInt("stream_id").toString() }
-        val name = obj.optString("name", "Canlı Kanal").trim()
-        val catId = obj.optString("category_id")
+        val streamId = obj.optAnyString("stream_id", i.toString())
+        val name = obj.optAnyString("name", "Canlı Kanal")
+        val catId = obj.optAnyString("category_id")
         val group = liveCatMap[catId] ?: "Canlı TV"
-        val icon = obj.optString("stream_icon").takeIf { it.isNotBlank() }
+        val icon = obj.optAnyString("stream_icon").takeIf { it.isNotBlank() }
         val streamUrl = "${creds.serverUrl}/live/${creds.username}/${creds.password}/$streamId.m3u8"
         results.add(
             ChannelEntry(
@@ -1709,13 +1781,13 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
     val vodArray = JSONArray(safeDownload(buildPlayerApiUrl(creds, "get_vod_streams"), "[]"))
     for (i in 0 until vodArray.length()) {
         val obj = vodArray.optJSONObject(i) ?: continue
-        val streamId = obj.optString("stream_id").ifBlank { obj.optInt("stream_id").toString() }
-        val name = obj.optString("name", "Film").trim()
-        val catId = obj.optString("category_id")
-        val ext = obj.optString("container_extension", "mp4").ifBlank { "mp4" }
+        val streamId = obj.optAnyString("stream_id", i.toString())
+        val name = obj.optAnyString("name", "Film")
+        val catId = obj.optAnyString("category_id")
+        val ext = obj.optAnyString("container_extension", "mp4")
         val group = vodCatMap[catId] ?: "Filmler"
-        val poster = obj.optString("stream_icon")
-            .ifBlank { obj.optString("movie_image") }
+        val poster = obj.optAnyString("stream_icon")
+            .ifBlank { obj.optAnyString("movie_image") }
             .takeIf { it.isNotBlank() }
         val movieUrl = "${creds.serverUrl}/movie/${creds.username}/${creds.password}/$streamId.$ext"
         results.add(
@@ -1734,12 +1806,12 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
     val seriesArray = JSONArray(safeDownload(buildPlayerApiUrl(creds, "get_series"), "[]"))
     for (i in 0 until seriesArray.length()) {
         val obj = seriesArray.optJSONObject(i) ?: continue
-        val seriesId = obj.optString("series_id").ifBlank { obj.optInt("series_id").toString() }
-        val name = obj.optString("name", "Dizi").trim()
-        val catId = obj.optString("category_id")
+        val seriesId = obj.optAnyString("series_id", i.toString())
+        val name = obj.optAnyString("name", "Dizi")
+        val catId = obj.optAnyString("category_id")
         val group = seriesCatMap[catId] ?: "Diziler"
-        val cover = obj.optString("cover")
-            .ifBlank { obj.optString("stream_icon") }
+        val cover = obj.optAnyString("cover")
+            .ifBlank { obj.optAnyString("stream_icon") }
             .takeIf { it.isNotBlank() }
         results.add(
             ChannelEntry(
@@ -1771,11 +1843,11 @@ private fun fetchXtreamSeriesEpisodes(creds: XtreamCredentials, seriesId: String
         val epArray = episodesObj.optJSONArray(seasonKey) ?: continue
         for (i in 0 until epArray.length()) {
             val epObj = epArray.optJSONObject(i) ?: continue
-            val epId = epObj.optString("id")
+            val epId = epObj.optAnyString("id")
             if (epId.isBlank()) continue
             val epNum = epObj.optInt("episode_num", i + 1)
-            val title = epObj.optString("title", "Bölüm $epNum").trim()
-            val ext = epObj.optString("container_extension", "mp4").ifBlank { "mp4" }
+            val title = epObj.optAnyString("title", "Bölüm $epNum")
+            val ext = epObj.optAnyString("container_extension", "mp4")
             val epUrl = "${creds.serverUrl}/series/${creds.username}/${creds.password}/$epId.$ext"
             list.add(
                 SeriesEpisodeItem(
@@ -1800,8 +1872,8 @@ private fun parseCategoryMap(rawJson: String): Map<String, String> {
     }
     for (i in 0 until arr.length()) {
         val obj = arr.optJSONObject(i) ?: continue
-        val id = obj.optString("category_id")
-        val name = obj.optString("category_name")
+        val id = obj.optAnyString("category_id")
+        val name = obj.optAnyString("category_name")
         if (id.isNotBlank() && name.isNotBlank()) {
             map[id] = name
         }
