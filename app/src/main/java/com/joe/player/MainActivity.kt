@@ -48,12 +48,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -171,7 +173,7 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v20"
+private const val PREFS_NAME = "joe_player_prefs_v21"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
@@ -182,6 +184,19 @@ private val activePosterJobs = AtomicInteger(0)
 private fun formatDurationBadge(positionMs: Long): String? {
     if (positionMs < 5_000L) return null
     val totalSeconds = positionMs / 1000L
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+    }
+}
+
+private fun formatPlayerClock(ms: Long): String {
+    val safeMs = ms.coerceAtLeast(0L)
+    val totalSeconds = safeMs / 1000L
     val hours = totalSeconds / 3600L
     val minutes = (totalSeconds % 3600L) / 60L
     val seconds = totalSeconds % 60L
@@ -868,6 +883,24 @@ private fun JoeApp() {
         }
         val categoryRowState = rememberLazyListState()
 
+        var currentPosMs by remember(currentCh.url) { mutableLongStateOf(0L) }
+        var totalDurationMs by remember(currentCh.url) { mutableLongStateOf(0L) }
+        var isSeeking by remember { mutableStateOf(false) }
+        var seekTargetMs by remember { mutableLongStateOf(0L) }
+
+        LaunchedEffect(activeChannel?.url, isPlayerFullScreen, showFullScreenOverlay) {
+            while (isPlayerFullScreen && activeChannel != null) {
+                runCatching {
+                    val dur = exoPlayer.duration
+                    totalDurationMs = if (dur != C.TIME_UNSET && dur > 0L) dur else 0L
+                    if (!isSeeking) {
+                        currentPosMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                    }
+                }
+                delay(500L)
+            }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -1094,10 +1127,111 @@ private fun JoeApp() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.BottomCenter)
-                        .background(Color.Black.copy(alpha = 0.85f))
-                        .padding(vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .background(Color.Black.copy(alpha = 0.88f))
+                        .padding(vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    val hasSeekableDuration = totalDurationMs > 0L
+                    val displayedPosMs = if (isSeeking) seekTargetMs else currentPosMs
+                    val sliderFraction = if (hasSeekableDuration) {
+                        (displayedPosMs.toFloat() / totalDurationMs.toFloat()).coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = formatPlayerClock(displayedPosMs),
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            softWrap = false
+                        )
+
+                        Slider(
+                            value = sliderFraction,
+                            onValueChange = { frac ->
+                                if (hasSeekableDuration) {
+                                    isSeeking = true
+                                    seekTargetMs = (frac * totalDurationMs).toLong().coerceIn(0L, totalDurationMs)
+                                }
+                            },
+                            onValueChangeFinished = {
+                                if (hasSeekableDuration) {
+                                    val target = seekTargetMs.coerceIn(0L, totalDurationMs)
+                                    runCatching {
+                                        exoPlayer.seekTo(target)
+                                        currentPosMs = target
+                                        recordRecentWatch(currentCh, target, persistDisk = true)
+                                    }
+                                }
+                                isSeeking = false
+                            },
+                            enabled = hasSeekableDuration,
+                            colors = SliderDefaults.colors(
+                                thumbColor = AccentRed,
+                                activeTrackColor = AccentRed,
+                                inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(26.dp)
+                        )
+
+                        Text(
+                            text = if (hasSeekableDuration) formatPlayerClock(totalDurationMs) else "CANLI",
+                            color = if (hasSeekableDuration) Color.LightGray else AccentRed,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            softWrap = false
+                        )
+
+                        IconButton(
+                            onClick = {
+                                val target = (currentPosMs - 10_000L).coerceAtLeast(0L)
+                                runCatching {
+                                    exoPlayer.seekTo(target)
+                                    currentPosMs = target
+                                }
+                            },
+                            enabled = hasSeekableDuration,
+                            modifier = Modifier.size(30.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Replay10,
+                                contentDescription = "10 Saniye Geri",
+                                tint = if (hasSeekableDuration) Color.White else Color.Gray,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = {
+                                val maxPos = if (totalDurationMs > 0L) totalDurationMs else Long.MAX_VALUE
+                                val target = (currentPosMs + 10_000L).coerceAtMost(maxPos)
+                                runCatching {
+                                    exoPlayer.seekTo(target)
+                                    currentPosMs = target
+                                }
+                            },
+                            enabled = hasSeekableDuration,
+                            modifier = Modifier.size(30.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Forward10,
+                                contentDescription = "10 Saniye İleri",
+                                tint = if (hasSeekableDuration) Color.White else Color.Gray,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
