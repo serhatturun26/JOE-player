@@ -120,7 +120,7 @@ private val AccentOrange = Color(0xFFE66C2C)
 private val CardDarkBg = Color(0xFF2B2B2B)
 private val ChipDarkBg = Color(0xFF1F1F1F)
 private val LightPageBg = Color(0xFFF7F7F7)
-private const val PREFS_NAME = "joe_player_prefs_v5"
+private const val PREFS_NAME = "joe_player_prefs_v6"
 private const val KEY_STATE_JSON = "saved_state_json"
 
 class MainActivity : ComponentActivity() {
@@ -894,7 +894,7 @@ private fun JoeApp() {
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Text(
-                                            text = if (selectedCategoryFilter == "Tümü") "Kategori" else selectedCategoryFilter,
+                                            text = if (selectedCategoryFilter == "Tümü") "Kategori (${categories.size - 1})" else selectedCategoryFilter,
                                             color = Color.White,
                                             fontWeight = FontWeight.Medium,
                                             fontSize = 14.sp,
@@ -960,6 +960,33 @@ private fun JoeApp() {
                                         )
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    if (selectedCategoryFilter != "Tümü") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(AccentOrange.copy(alpha = 0.12f))
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Kategori: $selectedCategoryFilter (${filteredAndSorted.size})",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFF1A1A1A),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = { selectedCategoryFilter = "Tümü" },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                            ) {
+                                Text("Tümünü Göster", color = AccentOrange, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -1037,13 +1064,36 @@ private fun JoeApp() {
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Text(
-                                        text = categoryName,
-                                        fontSize = 20.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color(0xFF1A1A1A),
-                                        modifier = Modifier.padding(horizontal = 16.dp)
-                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                selectedCategoryFilter = if (selectedCategoryFilter == categoryName) {
+                                                    "Tümü"
+                                                } else {
+                                                    categoryName
+                                                }
+                                            }
+                                            .padding(horizontal = 16.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = categoryName,
+                                            fontSize = 20.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color(0xFF1A1A1A),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Text(
+                                            text = "${channelList.size} >",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = AccentOrange
+                                        )
+                                    }
 
                                     LazyRow(
                                         contentPadding = PaddingValues(horizontal = 16.dp),
@@ -1757,7 +1807,7 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
     val results = mutableListOf<ChannelEntry>()
 
     val liveCatMap = parseCategoryMap(safeDownload(buildPlayerApiUrl(creds, "get_live_categories")))
-    val liveArray = JSONArray(safeDownload(buildPlayerApiUrl(creds, "get_live_streams"), "[]"))
+    val liveArray = parseJsonArrayFlexible(safeDownload(buildPlayerApiUrl(creds, "get_live_streams"), "[]"))
     for (i in 0 until liveArray.length()) {
         val obj = liveArray.optJSONObject(i) ?: continue
         val streamId = obj.optAnyString("stream_id", i.toString())
@@ -1779,7 +1829,7 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
     }
 
     val vodCatMap = parseCategoryMap(safeDownload(buildPlayerApiUrl(creds, "get_vod_categories")))
-    val vodArray = JSONArray(safeDownload(buildPlayerApiUrl(creds, "get_vod_streams"), "[]"))
+    val vodArray = parseJsonArrayFlexible(safeDownload(buildPlayerApiUrl(creds, "get_vod_streams"), "[]"))
     for (i in 0 until vodArray.length()) {
         val obj = vodArray.optJSONObject(i) ?: continue
         val streamId = obj.optAnyString("stream_id", i.toString())
@@ -1804,7 +1854,7 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
     }
 
     val seriesCatMap = parseCategoryMap(safeDownload(buildPlayerApiUrl(creds, "get_series_categories")))
-    val seriesArray = JSONArray(safeDownload(buildPlayerApiUrl(creds, "get_series"), "[]"))
+    val seriesArray = parseJsonArrayFlexible(safeDownload(buildPlayerApiUrl(creds, "get_series"), "[]"))
     for (i in 0 until seriesArray.length()) {
         val obj = seriesArray.optJSONObject(i) ?: continue
         val seriesId = obj.optAnyString("series_id", i.toString())
@@ -1829,6 +1879,33 @@ private fun fetchAllXtreamMedia(creds: XtreamCredentials): List<ChannelEntry> {
     }
 
     return results
+}
+
+private fun parseJsonArrayFlexible(raw: String): JSONArray {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return JSONArray()
+    if (trimmed.startsWith("[")) {
+        return try {
+            JSONArray(trimmed)
+        } catch (_: Exception) {
+            JSONArray()
+        }
+    }
+    if (trimmed.startsWith("{")) {
+        return try {
+            val obj = JSONObject(trimmed)
+            val arr = JSONArray()
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val itemObj = obj.optJSONObject(keys.next())
+                if (itemObj != null) arr.put(itemObj)
+            }
+            arr
+        } catch (_: Exception) {
+            JSONArray()
+        }
+    }
+    return JSONArray()
 }
 
 private fun fetchXtreamSeriesEpisodes(creds: XtreamCredentials, seriesId: String): List<SeriesEpisodeItem> {
@@ -1866,11 +1943,7 @@ private fun fetchXtreamSeriesEpisodes(creds: XtreamCredentials, seriesId: String
 
 private fun parseCategoryMap(rawJson: String): Map<String, String> {
     val map = mutableMapOf<String, String>()
-    val arr = try {
-        JSONArray(rawJson)
-    } catch (_: Exception) {
-        return map
-    }
+    val arr = parseJsonArrayFlexible(rawJson)
     for (i in 0 until arr.length()) {
         val obj = arr.optJSONObject(i) ?: continue
         val id = obj.optAnyString("category_id")
@@ -1895,8 +1968,8 @@ private fun downloadText(urlString: String): String {
     var redirects = 0
     while (redirects < 5) {
         val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15000
-            readTimeout = 20000
+            connectTimeout = 20000
+            readTimeout = 30000
             requestMethod = "GET"
             instanceFollowRedirects = false
             setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0")
