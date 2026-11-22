@@ -1,21 +1,30 @@
 package com.joe.player
 
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
@@ -24,391 +33,70 @@ import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
 import java.net.URL
 
-data class Channel(
+data class ChannelItem(
     val id: String,
     val name: String,
-    val streamUrl: String,
-    val category: String = "Genel",
+    val url: String,
+    val group: String = "Genel",
     val isFavorite: Boolean = false
 )
 
-data class PlaylistSource(
-    val id: String,
-    val title: String,
-    val url: String,
-    val channelCount: Int
-)
+enum class AddOptionTab(val label: String) {
+    URL("URL Liste"),
+    FILE("Dosya Seç"),
+    SINGLE("Tek Kanal")
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            JoeApp()
+            MaterialTheme(colorScheme = darkColorScheme()) {
+                JoePlayerApp()
+            }
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun JoeApp() {
-    var darkTheme by remember { mutableStateOf(true) }
-    var selectedTab by remember { mutableStateOf(0) } // 0: Ana Sayfa, 1: Listelerim, 2: Ayarlar
-    var playlists by remember { mutableStateOf(listOf<PlaylistSource>()) }
-    var channels by remember { mutableStateOf(listOf<Channel>()) }
-    var lastWatched by remember { mutableStateOf<Channel?>(null) }
-    var activeChannel by remember { mutableStateOf<Channel?>(null) }
-    var selectedCategory by remember { mutableStateOf("Tümü") }
-
-    val colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme()
-
-    MaterialTheme(colorScheme = colorScheme) {
-        if (activeChannel != null) {
-            PlayerScreen(
-                channel = activeChannel!!,
-                onBack = { activeChannel = null },
-                onToggleFavorite = { target ->
-                    channels = channels.map {
-                        if (it.id == target.id) it.copy(isFavorite = !it.isFavorite) else it
-                    }
-                    if (activeChannel?.id == target.id) {
-                        activeChannel = activeChannel?.copy(isFavorite = !target.isFavorite)
-                    }
-                }
-            )
-        } else {
-            Scaffold(
-                topBar = {
-                    TopAppBar(
-                        title = {
-                            Text(
-                                text = when (selectedTab) {
-                                    0 -> "JOE"
-                                    1 -> "Listelerim"
-                                    else -> "Ayarlar"
-                                },
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    )
-                },
-                bottomBar = {
-                    NavigationBar {
-                        NavigationBarItem(
-                            selected = selectedTab == 0,
-                            onClick = { selectedTab = 0 },
-                            icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                            label = { Text("Ana Sayfa") }
-                        )
-                        NavigationBarItem(
-                            selected = selectedTab == 1,
-                            onClick = { selectedTab = 1 },
-                            icon = { Icon(Icons.Default.PlaylistPlay, contentDescription = null) },
-                            label = { Text("Listelerim") }
-                        )
-                        NavigationBarItem(
-                            selected = selectedTab == 2,
-                            onClick = { selectedTab = 2 },
-                            icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                            label = { Text("Ayarlar") }
-                        )
-                    }
-                }
-            ) { innerPadding ->
-                Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
-                    when (selectedTab) {
-                        0 -> HomeTab(
-                            channels = channels,
-                            lastWatched = lastWatched,
-                            selectedCategory = selectedCategory,
-                            onSelectCategory = { selectedCategory = it },
-                            onOpenChannel = { ch ->
-                                lastWatched = ch
-                                activeChannel = ch
-                            },
-                            onToggleFavorite = { target ->
-                                channels = channels.map {
-                                    if (it.id == target.id) it.copy(isFavorite = !it.isFavorite) else it
-                                }
-                            },
-                            onGoToPlaylists = { selectedTab = 1 }
-                        )
-                        1 -> PlaylistsTab(
-                            playlists = playlists,
-                            onAddPlaylist = { title, url, parsedChannels ->
-                                val sourceId = "src_${System.currentTimeMillis()}"
-                                val tagged = parsedChannels.map { it.copy(id = "${sourceId}_${it.id}") }
-                                playlists = playlists + PlaylistSource(
-                                    id = sourceId,
-                                    title = title.ifBlank { "Liste ${playlists.size + 1}" },
-                                    url = url,
-                                    channelCount = tagged.size
-                                )
-                                channels = channels + tagged
-                                selectedTab = 0
-                            },
-                            onDeletePlaylist = { source ->
-                                playlists = playlists.filterNot { it.id == source.id }
-                                channels = channels.filterNot { it.id.startsWith(source.id) }
-                            }
-                        )
-                        2 -> SettingsTab(
-                            darkTheme = darkTheme,
-                            onToggleDarkTheme = { darkTheme = it }
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun HomeTab(
-    channels: List<Channel>,
-    lastWatched: Channel?,
-    selectedCategory: String,
-    onSelectCategory: (String) -> Unit,
-    onOpenChannel: (Channel) -> Unit,
-    onToggleFavorite: (Channel) -> Unit,
-    onGoToPlaylists: () -> Unit
-) {
-    if (channels.isEmpty()) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text("Henüz kanal listesi eklenmedi", style = MaterialTheme.typography.titleMedium)
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                "Listelerim sekmesinden kendi M3U veya M3U8 bağlantınızı ekleyerek başlayın.",
-                style = MaterialTheme.typography.bodyMedium
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = onGoToPlaylists) {
-                Icon(Icons.Default.Add, contentDescription = null)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Liste Ekle")
-            }
-        }
-        return
-    }
-
-    val categories = listOf("Tümü", "Favoriler") + channels.map { it.category }.distinct()
-    val filtered = when (selectedCategory) {
-        "Tümü" -> channels
-        "Favoriler" -> channels.filter { it.isFavorite }
-        else -> channels.filter { it.category == selectedCategory }
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        contentPadding = PaddingValues(vertical = 12.dp)
-    ) {
-        if (lastWatched != null) {
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth().clickable { onOpenChannel(lastWatched) }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.PlayCircle, contentDescription = null)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Kaldığın Yerden Devam Et", style = MaterialTheme.typography.labelMedium)
-                            Text(lastWatched.name, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(categories) { category ->
-                    FilterChip(
-                        selected = selectedCategory == category,
-                        onClick = { onSelectCategory(category) },
-                        label = { Text(category) }
-                    )
-                }
-            }
-        }
-
-        items(filtered, key = { it.id }) { channel ->
-            Card(
-                modifier = Modifier.fillMaxWidth().clickable { onOpenChannel(channel) }
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(channel.name, fontWeight = FontWeight.SemiBold)
-                        Text(channel.category, style = MaterialTheme.typography.bodySmall)
-                    }
-                    IconButton(onClick = { onToggleFavorite(channel) }) {
-                        Icon(
-                            imageVector = if (channel.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                            contentDescription = "Favori"
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun PlaylistsTab(
-    playlists: List<PlaylistSource>,
-    onAddPlaylist: (String, String, List<Channel>) -> Unit,
-    onDeletePlaylist: (PlaylistSource) -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    var titleInput by remember { mutableStateOf("") }
-    var urlInput by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(false) }
-    var statusMessage by remember { mutableStateOf<String?>(null) }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text("Yeni Liste Ekle (M3U / M3U8)", fontWeight = FontWeight.Bold)
-                    OutlinedTextField(
-                        value = titleInput,
-                        onValueChange = { titleInput = it },
-                        label = { Text("Liste Adı (İsteğe bağlı)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = urlInput,
-                        onValueChange = { urlInput = it },
-                        label = { Text("M3U / M3U8 Bağlantısı (URL)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Button(
-                        enabled = !isLoading && urlInput.isNotBlank(),
-                        onClick = {
-                            isLoading = true
-                            statusMessage = null
-                            val targetUrl = urlInput.trim()
-                            val targetTitle = titleInput.trim()
-                            scope.launch {
-                                try {
-                                    val rawText = withContext(Dispatchers.IO) {
-                                        URL(targetUrl).readText()
-                                    }
-                                    val parsed = parseM3uChannels(rawText)
-                                    if (parsed.isEmpty()) {
-                                        statusMessage = "Bağlantı okundu ancak geçerli kanal bulunamadı."
-                                    } else {
-                                        onAddPlaylist(targetTitle, targetUrl, parsed)
-                                        titleInput = ""
-                                        urlInput = ""
-                                        statusMessage = "${parsed.size} kanal eklendi."
-                                    }
-                                } catch (_: Exception) {
-                                    statusMessage = "Liste yüklenemedi. Bağlantıyı kontrol edip tekrar deneyin."
-                                } finally {
-                                    isLoading = false
-                                }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(if (isLoading) "Yükleniyor..." else "Kaydet ve Yükle")
-                    }
-                    if (statusMessage != null) {
-                        Text(statusMessage!!, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-        }
-
-        items(playlists, key = { it.id }) { source ->
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(source.title, fontWeight = FontWeight.SemiBold)
-                        Text("${source.channelCount} kanal", style = MaterialTheme.typography.bodySmall)
-                    }
-                    IconButton(onClick = { onDeletePlaylist(source) }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Sil")
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SettingsTab(
-    darkTheme: Boolean,
-    onToggleDarkTheme: (Boolean) -> Unit
-) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.padding(14.dp).fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Karanlık Mod", fontWeight = FontWeight.SemiBold)
-                    Text("Göz yormayan koyu tema", style = MaterialTheme.typography.bodySmall)
-                }
-                Switch(checked = darkTheme, onCheckedChange = onToggleDarkTheme)
-            }
-        }
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text("Yasal Bilgilendirme", fontWeight = FontWeight.Bold)
-                Text(
-                    "Bu uygulama herhangi bir yayın veya kanal sağlamaz; oynatılan tüm içerik ve bağlantıların sorumluluğu kullanıcıya aittir.",
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun PlayerScreen(
-    channel: Channel,
-    onBack: () -> Unit,
-    onToggleFavorite: (Channel) -> Unit
-) {
+fun JoePlayerApp() {
     val context = LocalContext.current
-    val exoPlayer = remember(channel.streamUrl) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(channel.streamUrl))
-            prepare()
-            playWhenReady = true
-        }
+    val scope = rememberCoroutineScope()
+
+    var channels by remember {
+        mutableStateOf(
+            listOf(
+                ChannelItem(
+                    id = "sample-hls-1",
+                    name = "Test HLS Akışı (Big Buck Bunny)",
+                    url = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
+                    group = "Demo",
+                    isFavorite = true
+                )
+            )
+        )
+    }
+
+    var selectedChannel by remember { mutableStateOf<ChannelItem?>(channels.firstOrNull()) }
+    var showAddDialog by remember { mutableStateOf(false) }
+    var selectedTab by remember { mutableStateOf(AddOptionTab.URL) }
+
+    // Form alanları
+    var playlistUrlInput by remember { mutableStateOf("") }
+    var singleNameInput by remember { mutableStateOf("") }
+    var singleUrlInput by remember { mutableStateOf("") }
+    var singleGroupInput by remember { mutableStateOf("Canlı TV") }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context).build()
     }
 
     DisposableEffect(exoPlayer) {
@@ -417,62 +105,444 @@ fun PlayerScreen(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Geri")
-            }
-            Text(
-                text = channel.name,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = { onToggleFavorite(channel) }) {
-                Icon(
-                    imageVector = if (channel.isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
-                    contentDescription = "Favori"
-                )
+    LaunchedEffect(selectedChannel?.url) {
+        val url = selectedChannel?.url
+        if (!url.isNullOrBlank()) {
+            exoPlayer.setMediaItem(MediaItem.fromUri(url))
+            exoPlayer.prepare()
+            exoPlayer.playWhenReady = true
+        }
+    }
+
+    fun mergeChannels(newItems: List<ChannelItem>, sourceLabel: String) {
+        if (newItems.isEmpty()) {
+            statusMessage = "$sourceLabel içinde geçerli kanal bulunamadı."
+            return
+        }
+        val existingUrls = channels.map { it.url }.toSet()
+        val uniqueNew = newItems.filter { it.url !in existingUrls }
+        channels = uniqueNew + channels
+        if (selectedChannel == null && channels.isNotEmpty()) {
+            selectedChannel = channels.first()
+        }
+        statusMessage = "$sourceLabel üzerinden ${newItems.size} kanal işlendi (${uniqueNew.size} yeni eklendi)."
+        showAddDialog = false
+    }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                isLoading = true
+                statusMessage = null
+                try {
+                    val content = withContext(Dispatchers.IO) {
+                        context.contentResolver.openInputStream(uri)?.use { stream ->
+                            BufferedReader(InputStreamReader(stream)).readText()
+                        }.orEmpty()
+                    }
+                    val parsed = parseM3uContent(content, defaultGroup = "Yerel Liste")
+                    mergeChannels(parsed, "Dosya")
+                } catch (e: Exception) {
+                    statusMessage = "Dosya okunamadı: ${e.localizedMessage ?: "Bilinmeyen hata"}"
+                } finally {
+                    isLoading = false
+                }
             }
         }
+    }
 
-        AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    player = exoPlayer
-                    useController = true
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.LiveTv, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("JOE Player", fontWeight = FontWeight.Bold)
+                    }
+                },
+                actions = {
+                    IconButton(onClick = {
+                        statusMessage = null
+                        showAddDialog = true
+                    }) {
+                        Icon(Icons.Default.Add, contentDescription = "Kanal veya Liste Ekle")
+                    }
+                }
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            // Oynatıcı alanı
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(230.dp)
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            player = exoPlayer
+                            useController = true
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            // Seçili kanal bilgisi ve hızlı yükleme kısayolları
+            Surface(
+                tonalElevation = 2.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        text = selectedChannel?.name ?: "Bir kanal seçin veya yükleyin",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = selectedChannel?.let { "${it.group} • ${it.url}" }
+                            ?: "URL, .m3u/.m3u8 dosyası veya tek yayın bağlantısı ekleyebilirsiniz.",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                selectedTab = AddOptionTab.URL
+                                statusMessage = null
+                                showAddDialog = true
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Link, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("URL", maxLines = 1)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                statusMessage = null
+                                filePickerLauncher.launch(arrayOf("*/*"))
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Dosya", maxLines = 1)
+                        }
+
+                        Button(
+                            onClick = {
+                                selectedTab = AddOptionTab.SINGLE
+                                statusMessage = null
+                                showAddDialog = true
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Ekle", maxLines = 1)
+                        }
+                    }
+
+                    if (statusMessage != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = statusMessage!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+
+            // Kanal listesi
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 12.dp),
+                contentPadding = PaddingValues(vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(channels, key = { it.id }) { channel ->
+                    val isPlaying = selectedChannel?.id == channel.id
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedChannel = channel },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isPlaying) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant
+                            }
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PlayArrow,
+                                contentDescription = "Oynat"
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = channel.name,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = channel.group,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            IconButton(onClick = {
+                                channels = channels.map {
+                                    if (it.id == channel.id) it.copy(isFavorite = !it.isFavorite) else it
+                                }
+                            }) {
+                                Icon(
+                                    imageVector = if (channel.isFavorite) Icons.Default.Star else Icons.Outlined.StarBorder,
+                                    contentDescription = "Favori"
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showAddDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!isLoading) showAddDialog = false },
+            title = { Text("Kanal / Liste Yükle") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        AddOptionTab.entries.forEach { tab ->
+                            FilterChip(
+                                selected = selectedTab == tab,
+                                onClick = {
+                                    selectedTab = tab
+                                    statusMessage = null
+                                },
+                                label = { Text(tab.label, maxLines = 1) }
+                            )
+                        }
+                    }
+
+                    when (selectedTab) {
+                        AddOptionTab.URL -> {
+                            OutlinedTextField(
+                                value = playlistUrlInput,
+                                onValueChange = { playlistUrlInput = it },
+                                label = { Text("M3U / M3U8 Liste Bağlantısı") },
+                                placeholder = { Text("https://.../liste.m3u8") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+
+                        AddOptionTab.FILE -> {
+                            Text(
+                                text = "Cihazınızdaki .m3u veya .m3u8 dosyasını seçerek kanalları içe aktarabilirsiniz.",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Button(
+                                onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+                                enabled = !isLoading,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.FolderOpen, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Cihazdan Dosya Seç")
+                            }
+                        }
+
+                        AddOptionTab.SINGLE -> {
+                            OutlinedTextField(
+                                value = singleNameInput,
+                                onValueChange = { singleNameInput = it },
+                                label = { Text("Kanal Adı") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = singleUrlInput,
+                                onValueChange = { singleUrlInput = it },
+                                label = { Text("Yayın Bağlantısı (.m3u8 / akış)") },
+                                placeholder = { Text("https://.../yayin.m3u8") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = singleGroupInput,
+                                onValueChange = { singleGroupInput = it },
+                                label = { Text("Kategori / Grup") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+
+                    if (isLoading) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+
+                    if (statusMessage != null) {
+                        Text(
+                            text = statusMessage!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             },
-            modifier = Modifier.fillMaxWidth().weight(1f)
+            confirmButton = {
+                when (selectedTab) {
+                    AddOptionTab.URL -> {
+                        Button(
+                            enabled = !isLoading && playlistUrlInput.isNotBlank(),
+                            onClick = {
+                                val targetUrl = playlistUrlInput.trim()
+                                scope.launch {
+                                    isLoading = true
+                                    statusMessage = null
+                                    try {
+                                        val content = withContext(Dispatchers.IO) {
+                                            fetchRemotePlaylist(targetUrl)
+                                        }
+                                        val parsed = parseM3uContent(content, defaultGroup = "Uzak Liste")
+                                        mergeChannels(parsed, "URL")
+                                        playlistUrlInput = ""
+                                    } catch (e: Exception) {
+                                        statusMessage = "Liste çekilemedi: ${e.localizedMessage ?: "Bağlantı hatası"}"
+                                    } finally {
+                                        isLoading = false
+                                    }
+                                }
+                            }
+                        ) {
+                            Text("Yükle")
+                        }
+                    }
+
+                    AddOptionTab.SINGLE -> {
+                        Button(
+                            enabled = singleUrlInput.isNotBlank(),
+                            onClick = {
+                                val cleanUrl = singleUrlInput.trim()
+                                val cleanName = singleNameInput.trim().ifEmpty { "Özel Kanal" }
+                                val cleanGroup = singleGroupInput.trim().ifEmpty { "Canlı TV" }
+                                val newChannel = ChannelItem(
+                                    id = "custom-${System.currentTimeMillis()}",
+                                    name = cleanName,
+                                    url = cleanUrl,
+                                    group = cleanGroup
+                                )
+                                selectedChannel = newChannel
+                                mergeChannels(listOf(newChannel), "Tek Kanal")
+                                singleNameInput = ""
+                                singleUrlInput = ""
+                            }
+                        ) {
+                            Text("Kaydet")
+                        }
+                    }
+
+                    AddOptionTab.FILE -> {
+                        TextButton(onClick = { if (!isLoading) showAddDialog = false }) {
+                            Text("Kapat")
+                        }
+                    }
+                }
+            },
+            dismissButton = {
+                if (selectedTab != AddOptionTab.FILE) {
+                    TextButton(
+                        enabled = !isLoading,
+                        onClick = { showAddDialog = false }
+                    ) {
+                        Text("İptal")
+                    }
+                }
+            }
         )
     }
 }
 
-fun parseM3uChannels(content: String): List<Channel> {
-    val result = mutableListOf<Channel>()
-    var currentName = "Bilinmeyen Kanal"
-    var currentCategory = "Genel"
+private fun fetchRemotePlaylist(urlString: String): String {
+    val connection = (URL(urlString).openConnection() as HttpURLConnection).apply {
+        connectTimeout = 15000
+        readTimeout = 15000
+        requestMethod = "GET"
+        setRequestProperty("User-Agent", "JOE-Player/1.0")
+    }
+    return try {
+        connection.inputStream.bufferedReader().use { it.readText() }
+    } finally {
+        connection.disconnect()
+    }
+}
 
-    content.lines().forEachIndexed { index, rawLine ->
-        val line = rawLine.trim()
-        if (line.startsWith("#EXTINF")) {
-            currentName = line.substringAfterLast(",", "Bilinmeyen Kanal").trim()
-            currentCategory = Regex("""group-title="([^"]*)"""").find(line)?.groupValues?.get(1)
-                ?.ifBlank { "Genel" } ?: "Genel"
-        } else if (line.isNotEmpty() && !line.startsWith("#")) {
+private fun parseM3uContent(content: String, defaultGroup: String): List<ChannelItem> {
+    val lines = content.lines().map { it.trim() }.filter { it.isNotEmpty() }
+    val result = mutableListOf<ChannelItem>()
+    var pendingTitle: String? = null
+    var pendingGroup: String = defaultGroup
+
+    for (line in lines) {
+        if (line.startsWith("#EXTINF:", ignoreCase = true)) {
+            val groupMatch = Regex("""group-title="([^"]*)"""", RegexOption.IGNORE_CASE).find(line)
+            pendingGroup = groupMatch?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() } ?: defaultGroup
+            val commaIndex = line.lastIndexOf(',')
+            pendingTitle = if (commaIndex != -1 && commaIndex + 1 < line.length) {
+                line.substring(commaIndex + 1).trim()
+            } else {
+                null
+            }
+        } else if (!line.startsWith("#")) {
+            val name = pendingTitle ?: line.substringAfterLast('/').substringBefore('?').ifBlank { "Kanal" }
             result.add(
-                Channel(
-                    id = "${index}_${line.hashCode()}",
-                    name = currentName,
-                    streamUrl = line,
-                    category = currentCategory
+                ChannelItem(
+                    id = "m3u-${result.size}-${line.hashCode()}",
+                    name = name,
+                    url = line,
+                    group = pendingGroup
                 )
             )
-            currentName = "Bilinmeyen Kanal"
-            currentCategory = "Genel"
+            pendingTitle = null
+            pendingGroup = defaultGroup
         }
     }
+
     return result
 }
