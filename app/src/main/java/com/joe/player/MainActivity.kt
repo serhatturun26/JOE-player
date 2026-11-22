@@ -141,7 +141,7 @@ private val AccentOrange = Color(0xFFE66C2C)
 private val CardDarkBg = Color(0xFF2B2B2B)
 private val ChipDarkBg = Color(0xFF1F1F1F)
 private val LightPageBg = Color(0xFFF7F7F7)
-private const val PREFS_NAME = "joe_player_prefs_v7"
+private const val PREFS_NAME = "joe_player_prefs_v8"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 
@@ -315,6 +315,25 @@ private fun JoeApp() {
         scope.launch(Dispatchers.IO) {
             savePersistentState(context = context, snapshot = snapshot)
         }
+    }
+
+    fun deletePlaylist(targetPlaylist: SavedPlaylist) {
+        val removedKeys = targetPlaylist.channels.map { "${it.kind.name}-${it.id}-${it.url}" }.toSet()
+        val updatedChannels = allChannels.filter { "${it.kind.name}-${it.id}-${it.url}" !in removedKeys }
+        val updatedPlaylists = playlists.filterNot { it.id == targetPlaylist.id }
+
+        if (activeChannel != null) {
+            val activeKey = "${activeChannel!!.kind.name}-${activeChannel!!.id}-${activeChannel!!.url}"
+            if (activeKey in removedKeys) {
+                activeChannel = null
+                isPlayerFullScreen = false
+            }
+        }
+
+        allChannels = updatedChannels
+        playlists = updatedPlaylists
+        statusText = "\"${targetPlaylist.title}\" listesi silindi."
+        persistNow(channels = updatedChannels, lists = updatedPlaylists)
     }
 
     LaunchedEffect(isPlayerFullScreen, activeChannel) {
@@ -1968,6 +1987,18 @@ private fun JoeApp() {
                         }
                     }
 
+                    if (playlists.isNotEmpty()) {
+                        item {
+                            Text(
+                                text = "Kayıtlı Listeler (${playlists.size})",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1A1A1A),
+                                modifier = Modifier.padding(top = 6.dp)
+                            )
+                        }
+                    }
+
                     items(playlists, key = { it.id }) { pl ->
                         Card(
                             modifier = Modifier
@@ -1975,14 +2006,31 @@ private fun JoeApp() {
                                 .clickable { currentRoute = BottomRoute.HOME },
                             colors = CardDefaults.cardColors(containerColor = Color.White)
                         ) {
-                            Column(modifier = Modifier.padding(14.dp)) {
-                                Text(pl.title, fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    text = "${pl.channels.size} içerik • ${pl.sourceInfo}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(pl.title, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        text = "${pl.channels.size} içerik • ${pl.sourceInfo}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                IconButton(
+                                    onClick = { deletePlaylist(pl) }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "Listeyi Sil",
+                                        tint = Color(0xFFD32F2F)
+                                    )
+                                }
                             }
                         }
                     }
