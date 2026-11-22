@@ -63,6 +63,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 
 enum class MediaKind(val label: String) {
     LIVE("Canlı TV"),
@@ -108,11 +109,28 @@ data class SeriesEpisodeItem(
     val streamUrl: String
 )
 
+enum class PlaylistSourceType {
+    STREAM,
+    M3U8,
+    JSON,
+    HTML,
+    XTREAM,
+    MAC_STB,
+    MHUB,
+    GITHUB,
+    LOCAL_FILE
+}
+
 data class SavedPlaylist(
     val id: String,
     val title: String,
     val sourceInfo: String,
-    val channels: List<ChannelEntry>
+    val channels: List<ChannelEntry>,
+    val sourceType: PlaylistSourceType = PlaylistSourceType.M3U8,
+    val preferredKind: MediaKind = MediaKind.LIVE,
+    val xtreamCreds: XtreamCredentials? = null,
+    val macPortalUrl: String = "",
+    val macAddress: String = ""
 )
 
 private enum class BottomRoute(val label: String) {
@@ -150,10 +168,23 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v14"
+private const val PREFS_NAME = "joe_player_prefs_v15"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
+
+private fun formatDurationBadge(positionMs: Long): String? {
+    if (positionMs < 5_000L) return null
+    val totalSeconds = positionMs / 1000L
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+    }
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -291,6 +322,7 @@ private fun JoeApp() {
     var settingsFeedback by remember { mutableStateOf<String?>(null) }
     var statusText by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
+    var refreshingPlaylistId by remember { mutableStateOf<String?>(null) }
 
     val exoPlayer = remember { ExoPlayer.Builder(context).build() }
     var isPlayingState by remember { mutableStateOf(false) }
@@ -395,6 +427,81 @@ private fun JoeApp() {
         recentWatches = updatedRecents
         statusText = "\"${targetPlaylist.title}\" listesi silindi."
         persistNow(channels = updatedChannels, lists = updatedPlaylists, recents = updatedRecents)
+    }
+
+    fun refreshPlaylist(targetPlaylist: SavedPlaylist) {
+        if (targetPlaylist.sourceType == PlaylistSourceType.LOCAL_FILE || targetPlaylist.sourceType == PlaylistSourceType.STREAM) {
+            statusText = "\"${targetPlaylist.title}\" yerel/tekil kaynak olduğu için doğrudan yenilenemez."
+            return
+        }
+        val hdrs = currentHeaders()
+        scope.launch {
+            refreshingPlaylistId = targetPlaylist.id
+            statusText = "\"${targetPlaylist.title}\" yenileniyor..."
+            try {
+                val refreshedItems = withContext(Dispatchers.IO) {
+                    when (targetPlaylist.sourceType) {
+                        PlaylistSourceType.XTREAM -> {
+                            val creds = targetPlaylist.xtreamCreds
+                                ?: throw IllegalStateException("Xtream bilgileri bulunamadı.")
+                            fetchAllXtreamMedia(creds, hdrs)
+                        }
+                        PlaylistSourceType.MAC_STB -> {
+                            fetchMacPortalChannels(
+                                portalUrl = targetPlaylist.macPortalUrl,
+                                macAddress = targetPlaylist.macAddress,
+                                headers = hdrs,
+                                fallbackKind = targetPlaylist.preferredKind
+                            )
+                        }
+                        PlaylistSourceType.M3U8 -> {
+                            val raw = downloadText(targetPlaylist.sourceInfo, hdrs)
+                            parsePlaylistText(raw, "M3U8 Liste", targetPlaylist.preferredKind)
+                        }
+                        PlaylistSourceType.JSON -> {
+                            val raw = downloadText(targetPlaylist.sourceInfo, hdrs)
+                            parseJsonPlaylist(raw, "JSON Liste", targetPlaylist.preferredKind)
+                        }
+                        PlaylistSourceType.HTML -> {
+                            val raw = downloadText(targetPlaylist.sourceInfo, hdrs)
+                            parseHtmlStreams(raw, targetPlaylist.sourceInfo, "HTML Yayınlar", targetPlaylist.preferredKind)
+                        }
+                        PlaylistSourceType.MHUB -> {
+                            val raw = downloadText(targetPlaylist.sourceInfo, hdrs)
+                            parseMhubPlugin(raw, targetPlaylist.preferredKind)
+                        }
+                        PlaylistSourceType.GITHUB -> {
+                            fetchGithubLists(targetPlaylist.sourceInfo, hdrs, targetPlaylist.preferredKind)
+                        }
+                        PlaylistSourceType.STREAM, PlaylistSourceType.LOCAL_FILE -> emptyList()
+                    }
+                }
+
+                if (refreshedItems.isEmpty()) {
+                    statusText = "Yenileme sırasında içerik bulunamadı."
+                } else {
+                    val favMap = allChannels.associate { "${it.kind.name}-${it.id}-${it.url}" to it.isFavorite }
+                    val oldKeys = targetPlaylist.channels.map { "${it.kind.name}-${it.id}-${it.url}" }.toSet()
+                    val enriched = refreshedItems.map { ch ->
+                        val fav = favMap["${ch.kind.name}-${ch.id}-${ch.url}"] ?: false
+                        ch.copy(isFavorite = fav)
+                    }
+                    val remaining = allChannels.filter { "${it.kind.name}-${it.id}-${it.url}" !in oldKeys }
+                    val mergedChannels = enriched + remaining
+                    val updatedPlaylists = playlists.map { pl ->
+                        if (pl.id == targetPlaylist.id) pl.copy(channels = enriched) else pl
+                    }
+                    allChannels = mergedChannels
+                    playlists = updatedPlaylists
+                    persistNow(channels = mergedChannels, lists = updatedPlaylists)
+                    statusText = "\"${targetPlaylist.title}\" güncellendi (${enriched.size} içerik)."
+                }
+            } catch (e: Exception) {
+                statusText = "Liste yenilenemedi: ${e.localizedMessage ?: "Bağlantı hatası"}"
+            } finally {
+                refreshingPlaylistId = null
+            }
+        }
     }
 
     LaunchedEffect(isPlayerFullScreen, activeChannel) {
@@ -515,6 +622,11 @@ private fun JoeApp() {
         newChannels: List<ChannelEntry>,
         playlistTitle: String,
         sourceInfo: String,
+        sourceType: PlaylistSourceType = PlaylistSourceType.M3U8,
+        preferredKind: MediaKind = MediaKind.LIVE,
+        xtreamCreds: XtreamCredentials? = null,
+        macPortalUrl: String = "",
+        macAddress: String = "",
         openPlayerFirst: ChannelEntry? = null,
         targetKind: MediaKind? = null
     ) {
@@ -531,7 +643,12 @@ private fun JoeApp() {
             id = "pl-${System.currentTimeMillis()}-${playlists.size}",
             title = playlistTitle.ifBlank { "Liste ${playlists.size + 1}" },
             sourceInfo = sourceInfo,
-            channels = newChannels
+            channels = newChannels,
+            sourceType = sourceType,
+            preferredKind = preferredKind,
+            xtreamCreds = xtreamCreds,
+            macPortalUrl = macPortalUrl,
+            macAddress = macAddress
         )
         val mergedPlaylists = listOf(newPlaylist) + playlists
         playlists = mergedPlaylists
@@ -603,6 +720,8 @@ private fun JoeApp() {
                     newChannels = listOf(entry),
                     playlistTitle = chosenName,
                     sourceInfo = "Yerel Video Dosyası",
+                    sourceType = PlaylistSourceType.LOCAL_FILE,
+                    preferredKind = defaultImportKind,
                     openPlayerFirst = entry,
                     targetKind = defaultImportKind
                 )
@@ -622,25 +741,53 @@ private fun JoeApp() {
                         FileImportTarget.M3U8 -> {
                             val parsed = parsePlaylistText(content, "Diğer", defaultImportKind)
                             val title = m3uNameInput.trim().ifEmpty { "M3U8 Dosyası" }
-                            addImportedChannels(parsed, title, "Yerel .m3u / .m3u8 dosyası", targetKind = defaultImportKind)
+                            addImportedChannels(
+                                newChannels = parsed,
+                                playlistTitle = title,
+                                sourceInfo = "Yerel .m3u / .m3u8 dosyası",
+                                sourceType = PlaylistSourceType.LOCAL_FILE,
+                                preferredKind = defaultImportKind,
+                                targetKind = defaultImportKind
+                            )
                             m3uNameInput = ""
                         }
                         FileImportTarget.JSON -> {
                             val parsed = parseJsonPlaylist(content, "JSON Liste", defaultImportKind)
                             val title = jsonNameInput.trim().ifEmpty { "JSON Dosyası" }
-                            addImportedChannels(parsed, title, "Yerel .json dosyası", targetKind = defaultImportKind)
+                            addImportedChannels(
+                                newChannels = parsed,
+                                playlistTitle = title,
+                                sourceInfo = "Yerel .json dosyası",
+                                sourceType = PlaylistSourceType.LOCAL_FILE,
+                                preferredKind = defaultImportKind,
+                                targetKind = defaultImportKind
+                            )
                             jsonNameInput = ""
                         }
                         FileImportTarget.HTML -> {
                             val parsed = parseHtmlStreams(content, "", "HTML Yayınlar", defaultImportKind)
                             val title = htmlNameInput.trim().ifEmpty { "HTML Dosyası" }
-                            addImportedChannels(parsed, title, "Yerel .html dosyası", targetKind = defaultImportKind)
+                            addImportedChannels(
+                                newChannels = parsed,
+                                playlistTitle = title,
+                                sourceInfo = "Yerel .html dosyası",
+                                sourceType = PlaylistSourceType.LOCAL_FILE,
+                                preferredKind = defaultImportKind,
+                                targetKind = defaultImportKind
+                            )
                             htmlNameInput = ""
                         }
                         FileImportTarget.MHUB -> {
                             val parsed = parseMhubPlugin(content, defaultImportKind)
                             val title = mhubNameInput.trim().ifEmpty { "mHub Eklentisi" }
-                            addImportedChannels(parsed, title, "Yerel mHub dosyası", targetKind = defaultImportKind)
+                            addImportedChannels(
+                                newChannels = parsed,
+                                playlistTitle = title,
+                                sourceInfo = "Yerel mHub dosyası",
+                                sourceType = PlaylistSourceType.LOCAL_FILE,
+                                preferredKind = defaultImportKind,
+                                targetKind = defaultImportKind
+                            )
                             mhubNameInput = ""
                         }
                         FileImportTarget.VIDEO -> Unit
@@ -1180,6 +1327,17 @@ private fun JoeApp() {
                     kindChannels.count { it.isFavorite }
                 }
 
+                val resumeBadgeByKey = remember(recentWatches) {
+                    recentWatches.associate { rec ->
+                        val badge = if (rec.channel.kind != MediaKind.LIVE) {
+                            formatDurationBadge(rec.lastPositionMs)
+                        } else {
+                            null
+                        }
+                        "${rec.channel.kind.name}-${rec.channel.id}-${rec.channel.url}" to badge
+                    }
+                }
+
                 val kindRecentChannels = remember(recentWatches, allChannels, selectedMediaKind, onlyFavoritesFilter) {
                     recentWatches
                         .filter { it.channel.kind == selectedMediaKind }
@@ -1576,9 +1734,11 @@ private fun JoeApp() {
                                 items = filteredAndSorted,
                                 key = { ch -> "${ch.kind.name}-${ch.id}" }
                             ) { channel ->
+                                val badge = resumeBadgeByKey["${channel.kind.name}-${channel.id}-${channel.url}"]
                                 MediaShelfCard(
                                     channel = channel,
                                     isSelected = activeChannel?.id == channel.id && activeChannel?.kind == channel.kind,
+                                    resumeBadge = badge,
                                     onClick = { handleCardClick(channel) },
                                     onToggleFavorite = { toggleFavorite(channel.id) },
                                     modifier = Modifier
@@ -1644,9 +1804,11 @@ private fun JoeApp() {
                                             items = channelList,
                                             key = { ch -> "${categoryName}-${ch.kind.name}-${ch.id}" }
                                         ) { channel ->
+                                            val badge = resumeBadgeByKey["${channel.kind.name}-${channel.id}-${channel.url}"]
                                             MediaShelfCard(
                                                 channel = channel,
                                                 isSelected = activeChannel?.id == channel.id && activeChannel?.kind == channel.kind,
+                                                resumeBadge = badge,
                                                 onClick = { handleCardClick(channel) },
                                                 onToggleFavorite = { toggleFavorite(channel.id) },
                                                 modifier = Modifier
@@ -1703,7 +1865,7 @@ private fun JoeApp() {
                         }
                     }
 
-                    if (isLoading) {
+                    if (isLoading || refreshingPlaylistId != null) {
                         item {
                             LinearProgressIndicator(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1815,6 +1977,8 @@ private fun JoeApp() {
                                                                 newChannels = listOf(item),
                                                                 playlistTitle = cleanName,
                                                                 sourceInfo = "Ağ Akışı",
+                                                                sourceType = PlaylistSourceType.STREAM,
+                                                                preferredKind = defaultImportKind,
                                                                 openPlayerFirst = item,
                                                                 targetKind = defaultImportKind
                                                             )
@@ -1877,6 +2041,8 @@ private fun JoeApp() {
                                                                         newChannels = parsed,
                                                                         playlistTitle = m3uNameInput.trim().ifEmpty { "M3U8 URL Listesi" },
                                                                         sourceInfo = url,
+                                                                        sourceType = PlaylistSourceType.M3U8,
+                                                                        preferredKind = defaultImportKind,
                                                                         targetKind = defaultImportKind
                                                                     )
                                                                     m3uUrlInput = ""
@@ -1941,6 +2107,8 @@ private fun JoeApp() {
                                                                         newChannels = parsed,
                                                                         playlistTitle = jsonNameInput.trim().ifEmpty { "JSON Listesi" },
                                                                         sourceInfo = url,
+                                                                        sourceType = PlaylistSourceType.JSON,
+                                                                        preferredKind = defaultImportKind,
                                                                         targetKind = defaultImportKind
                                                                     )
                                                                     jsonUrlInput = ""
@@ -2005,6 +2173,8 @@ private fun JoeApp() {
                                                                         newChannels = parsed,
                                                                         playlistTitle = htmlNameInput.trim().ifEmpty { "HTML Listesi" },
                                                                         sourceInfo = url,
+                                                                        sourceType = PlaylistSourceType.HTML,
+                                                                        preferredKind = defaultImportKind,
                                                                         targetKind = defaultImportKind
                                                                     )
                                                                     htmlUrlInput = ""
@@ -2102,6 +2272,9 @@ private fun JoeApp() {
                                                                     newChannels = imported,
                                                                     playlistTitle = title,
                                                                     sourceInfo = creds.serverUrl,
+                                                                    sourceType = PlaylistSourceType.XTREAM,
+                                                                    preferredKind = MediaKind.LIVE,
+                                                                    xtreamCreds = creds,
                                                                     targetKind = MediaKind.LIVE
                                                                 )
                                                             } catch (e: Exception) {
@@ -2165,6 +2338,10 @@ private fun JoeApp() {
                                                                     newChannels = parsed,
                                                                     playlistTitle = title,
                                                                     sourceInfo = "$portal • $mac",
+                                                                    sourceType = PlaylistSourceType.MAC_STB,
+                                                                    preferredKind = defaultImportKind,
+                                                                    macPortalUrl = portal,
+                                                                    macAddress = mac,
                                                                     targetKind = defaultImportKind
                                                                 )
                                                             } catch (e: Exception) {
@@ -2221,6 +2398,8 @@ private fun JoeApp() {
                                                                         newChannels = parsed,
                                                                         playlistTitle = mhubNameInput.trim().ifEmpty { "mHub Eklentisi" },
                                                                         sourceInfo = url,
+                                                                        sourceType = PlaylistSourceType.MHUB,
+                                                                        preferredKind = defaultImportKind,
                                                                         targetKind = defaultImportKind
                                                                     )
                                                                     mhubUrlInput = ""
@@ -2280,6 +2459,8 @@ private fun JoeApp() {
                                                                     newChannels = parsed,
                                                                     playlistTitle = githubNameInput.trim().ifEmpty { "GitHub Toplu Liste" },
                                                                     sourceInfo = url,
+                                                                    sourceType = PlaylistSourceType.GITHUB,
+                                                                    preferredKind = defaultImportKind,
                                                                     targetKind = defaultImportKind
                                                                 )
                                                                 githubUrlInput = ""
@@ -2376,6 +2557,12 @@ private fun JoeApp() {
                     }
 
                     items(playlists, key = { it.id }) { pl ->
+                        val liveCnt = pl.channels.count { it.kind == MediaKind.LIVE }
+                        val movieCnt = pl.channels.count { it.kind == MediaKind.MOVIES }
+                        val seriesCnt = pl.channels.count { it.kind == MediaKind.SERIES }
+                        val canRefresh = pl.sourceType != PlaylistSourceType.LOCAL_FILE &&
+                            pl.sourceType != PlaylistSourceType.STREAM
+
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2392,20 +2579,42 @@ private fun JoeApp() {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(pl.title, fontWeight = FontWeight.SemiBold)
                                     Text(
-                                        text = "${pl.channels.size} içerik • ${pl.sourceInfo}",
+                                        text = "TV: $liveCnt • Film: $movieCnt • Dizi: $seriesCnt",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = AccentRed,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = pl.sourceInfo,
                                         style = MaterialTheme.typography.bodySmall,
+                                        color = Color.Gray,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
-                                IconButton(
-                                    onClick = { deletePlaylist(pl) }
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Delete,
-                                        contentDescription = "Listeyi Sil",
-                                        tint = AccentRed
-                                    )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (canRefresh) {
+                                        IconButton(
+                                            onClick = { refreshPlaylist(pl) },
+                                            enabled = refreshingPlaylistId == null && !isLoading
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Refresh,
+                                                contentDescription = "Listeyi Yenile",
+                                                tint = Color(0xFF333333)
+                                            )
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = { deletePlaylist(pl) }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Listeyi Sil",
+                                            tint = AccentRed
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -2594,6 +2803,7 @@ private fun JoeApp() {
 private fun MediaShelfCard(
     channel: ChannelEntry,
     isSelected: Boolean,
+    resumeBadge: String? = null,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit,
     modifier: Modifier = Modifier
@@ -2619,6 +2829,24 @@ private fun MediaShelfCard(
         modifier = modifier
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
+            if (resumeBadge != null) {
+                Surface(
+                    color = AccentRed,
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                ) {
+                    Text(
+                        text = resumeBadge,
+                        color = Color.White,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
             IconButton(
                 onClick = onToggleFavorite,
                 modifier = Modifier
@@ -2782,12 +3010,36 @@ private fun loadPersistentState(context: Context): PersistentSnapshot {
         val plArr = root.optJSONArray("playlists") ?: JSONArray()
         for (i in 0 until plArr.length()) {
             val pObj = plArr.optJSONObject(i) ?: continue
+            val srcType = runCatching {
+                PlaylistSourceType.valueOf(pObj.optString("sourceType", PlaylistSourceType.M3U8.name))
+            }.getOrDefault(PlaylistSourceType.M3U8)
+            val prefKind = runCatching {
+                MediaKind.valueOf(pObj.optString("preferredKind", MediaKind.LIVE.name))
+            }.getOrDefault(MediaKind.LIVE)
+            val plXtObj = pObj.optJSONObject("xtreamCreds")
+            val plXtream = if (plXtObj != null) {
+                XtreamCredentials(
+                    serverUrl = plXtObj.optString("serverUrl"),
+                    username = plXtObj.optString("username"),
+                    password = plXtObj.optString("password")
+                )
+            } else if (srcType == PlaylistSourceType.XTREAM) {
+                xtream
+            } else {
+                null
+            }
+
             playlists.add(
                 SavedPlaylist(
                     id = pObj.optString("id", "pl-$i"),
                     title = pObj.optString("title", "Liste"),
                     sourceInfo = pObj.optString("sourceInfo", ""),
-                    channels = parseChannelsArray(pObj.optJSONArray("channels") ?: JSONArray(), xtream)
+                    channels = parseChannelsArray(pObj.optJSONArray("channels") ?: JSONArray(), plXtream ?: xtream),
+                    sourceType = srcType,
+                    preferredKind = prefKind,
+                    xtreamCreds = plXtream,
+                    macPortalUrl = pObj.optString("macPortalUrl", ""),
+                    macAddress = pObj.optString("macAddress", "")
                 )
             )
         }
@@ -2886,6 +3138,20 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) 
                     put("id", pl.id)
                     put("title", pl.title)
                     put("sourceInfo", pl.sourceInfo)
+                    put("sourceType", pl.sourceType.name)
+                    put("preferredKind", pl.preferredKind.name)
+                    put("macPortalUrl", pl.macPortalUrl)
+                    put("macAddress", pl.macAddress)
+                    pl.xtreamCreds?.let { x ->
+                        put(
+                            "xtreamCreds",
+                            JSONObject().apply {
+                                put("serverUrl", x.serverUrl)
+                                put("username", x.username)
+                                put("password", x.password)
+                            }
+                        )
+                    }
                     put("channels", channelsToJsonArray(pl.channels))
                 }
             )
