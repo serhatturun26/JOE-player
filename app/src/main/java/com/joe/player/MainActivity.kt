@@ -171,7 +171,7 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v19"
+private const val PREFS_NAME = "joe_player_prefs_v20"
 private const val KEY_STATE_JSON = "saved_state_json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
@@ -1753,10 +1753,10 @@ private fun JoeApp() {
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            itemsIndexed(
+                            items(
                                 items = filteredAndSorted,
-                                key = { idx, ch -> "grid-${ch.kind.name}-${idx}-${ch.id}" }
-                            ) { _, channel ->
+                                key = { ch -> "grid-${ch.kind.name}-${ch.id}-${ch.url.hashCode()}" }
+                            ) { channel ->
                                 val badge = resumeBadgeByKey["${channel.kind.name}-${channel.id}-${channel.url}"]
                                 MediaShelfCard(
                                     channel = channel,
