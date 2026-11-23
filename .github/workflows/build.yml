@@ -35,9 +35,10 @@ jobs:
 
       - name: Generate JOE Logo, Splash Theme & Update Manifest
         run: |
-          python3 -c '
+          python3 - << 'EOF'
+          import os
+          import re
           from PIL import Image, ImageDraw, ImageFont
-          import os, re
 
           res_dirs = [
               "app/src/main/res/mipmap-mdpi",
@@ -104,17 +105,17 @@ jobs:
               def patch_app_tag(m):
                   tag = m.group(0)
                   if "android:icon=" in tag:
-                      tag = re.sub(r\x27android:icon="[^"]*"\x27, \x27android:icon="@mipmap/ic_launcher"\x27, tag)
+                      tag = re.sub(r'android:icon="[^"]*"', 'android:icon="@mipmap/ic_launcher"', tag)
                   else:
-                      tag = tag.replace("<application", \x27<application android:icon="@mipmap/ic_launcher"\x27, 1)
+                      tag = tag.replace("<application", '<application android:icon="@mipmap/ic_launcher"', 1)
                   if "android:roundIcon=" in tag:
-                      tag = re.sub(r\x27android:roundIcon="[^"]*"\x27, \x27android:roundIcon="@mipmap/ic_launcher_round"\x27, tag)
+                      tag = re.sub(r'android:roundIcon="[^"]*"', 'android:roundIcon="@mipmap/ic_launcher_round"', tag)
                   else:
-                      tag = tag.replace("<application", \x27<application android:roundIcon="@mipmap/ic_launcher_round"\x27, 1)
+                      tag = tag.replace("<application", '<application android:roundIcon="@mipmap/ic_launcher_round"', 1)
                   if "android:label=" in tag:
-                      tag = re.sub(r\x27android:label="[^"]*"\x27, \x27android:label="JOE"\x27, tag)
+                      tag = re.sub(r'android:label="[^"]*"', 'android:label="JOE"', tag)
                   else:
-                      tag = tag.replace("<application", \x27<application android:label="JOE"\x27, 1)
+                      tag = tag.replace("<application", '<application android:label="JOE"', 1)
                   return tag
 
               xml = re.sub(r"<application\b[^>]*>", patch_app_tag, xml, count=1)
@@ -122,14 +123,14 @@ jobs:
               def patch_main_activity(m):
                   tag = m.group(0)
                   if "android:theme=" in tag:
-                      return re.sub(r\x27android:theme="[^"]*"\x27, \x27android:theme="@style/Theme.JoeSplash"\x27, tag)
-                  return tag.replace("<activity", \x27<activity android:theme="@style/Theme.JoeSplash"\x27, 1)
+                      return re.sub(r'android:theme="[^"]*"', 'android:theme="@style/Theme.JoeSplash"', tag)
+                  return tag.replace("<activity", '<activity android:theme="@style/Theme.JoeSplash"', 1)
 
               xml = re.sub(r"<activity\b[^>]*MainActivity[^>]*>", patch_main_activity, xml, count=1)
 
               with open(manifest_path, "w", encoding="utf-8") as mf:
                   mf.write(xml)
-          '
+          EOF
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon
