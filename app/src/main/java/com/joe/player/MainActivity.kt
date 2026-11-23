@@ -148,6 +148,7 @@ data class SavedPlaylist(
     val title: String,
     val sourceInfo: String,
     val channels: List<ChannelEntry>,
+    val itemCountSummary: Int = channels.size,
     val sourceType: PlaylistSourceType = PlaylistSourceType.M3U8,
     val preferredKind: MediaKind = MediaKind.LIVE,
     val xtreamCreds: XtreamCredentials? = null,
@@ -190,11 +191,11 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v27"
-private const val KEY_STATE_JSON = "saved_state_json_v27"
-private const val STATE_FILE_NAME = "joe_channels_v27.json"
-private const val STATE_TEMP_FILE_NAME = "joe_channels_v27.tmp"
-private const val RECENT_FILE_NAME = "recent_watch_v27.json"
+private const val PREFS_NAME = "joe_player_prefs_v28"
+private const val KEY_STATE_JSON = "saved_state_json_v28"
+private const val STATE_FILE_NAME = "joe_channels_v28.json"
+private const val STATE_TEMP_FILE_NAME = "joe_channels_v28.tmp"
+private const val RECENT_FILE_NAME = "recent_watch_v28.json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
 
@@ -575,10 +576,18 @@ private fun JoeApp() {
 
     fun deletePlaylist(targetPlaylist: SavedPlaylist) {
         val removedKeys = targetPlaylist.channels.map { "${it.kind.name}-${it.id}-${it.url}" }.toSet()
-        val updatedChannels = allChannels.filter { "${it.kind.name}-${it.id}-${it.url}" !in removedKeys }
+        val updatedChannels = if (removedKeys.isNotEmpty()) {
+            allChannels.filter { "${it.kind.name}-${it.id}-${it.url}" !in removedKeys }
+        } else {
+            emptyList()
+        }
         val updatedPlaylists = playlists.filterNot { it.id == targetPlaylist.id }
-        val updatedRecents = recentWatches.filterNot {
-            "${it.channel.kind.name}-${it.channel.id}-${it.channel.url}" in removedKeys
+        val updatedRecents = if (removedKeys.isNotEmpty()) {
+            recentWatches.filterNot {
+                "${it.channel.kind.name}-${it.channel.id}-${it.channel.url}" in removedKeys
+            }
+        } else {
+            recentWatches
         }
 
         if (activeChannel != null) {
@@ -653,10 +662,21 @@ private fun JoeApp() {
                         val fav = favMap["${ch.kind.name}-${ch.id}-${ch.url}"] ?: false
                         ch.copy(isFavorite = fav)
                     }
-                    val remaining = allChannels.filter { "${it.kind.name}-${it.id}-${it.url}" !in oldKeys }
+                    val remaining = if (oldKeys.isNotEmpty()) {
+                        allChannels.filter { "${it.kind.name}-${it.id}-${it.url}" !in oldKeys }
+                    } else {
+                        emptyList()
+                    }
                     val mergedChannels = (enriched + remaining).distinctBy { "${it.kind.name}-${it.id}-${it.url}" }
                     val updatedPlaylists = playlists.map { pl ->
-                        if (pl.id == targetPlaylist.id) pl.copy(channels = enriched) else pl
+                        if (pl.id == targetPlaylist.id) {
+                            pl.copy(
+                                channels = if (enriched.size > 4000) emptyList() else enriched,
+                                itemCountSummary = enriched.size
+                            )
+                        } else {
+                            pl
+                        }
                     }
                     allChannels = mergedChannels
                     playlists = updatedPlaylists
@@ -870,33 +890,35 @@ private fun JoeApp() {
             statusText = "Geçerli içerik bulunamadı."
             return
         }
-        val existingKeys = allChannels.map { "${it.kind.name}-${it.id}-${it.url}" }.toSet()
-        val uniqueChannels = newChannels.filter { "${it.kind.name}-${it.id}-${it.url}" !in existingKeys }
-        val mergedChannels = (uniqueChannels + allChannels).distinctBy { "${it.kind.name}-${it.id}-${it.url}" }
+        val cappedNew = if (newChannels.size > 15_000) newChannels.take(15_000) else newChannels
+        val mergedChannels = (cappedNew + allChannels)
+            .distinctBy { "${it.kind.name}-${it.id}-${it.url}" }
+            .take(25_000)
         allChannels = mergedChannels
 
         val newPlaylist = SavedPlaylist(
             id = "pl-${System.currentTimeMillis()}-${playlists.size}",
             title = playlistTitle.ifBlank { "Liste ${playlists.size + 1}" },
             sourceInfo = sourceInfo,
-            channels = newChannels,
+            channels = if (cappedNew.size > 3_000) emptyList() else cappedNew,
+            itemCountSummary = cappedNew.size,
             sourceType = sourceType,
             preferredKind = preferredKind,
             xtreamCreds = xtreamCreds,
             macPortalUrl = macPortalUrl,
             macAddress = macAddress
         )
-        val mergedPlaylists = (listOf(newPlaylist) + playlists).distinctBy { it.id }
+        val mergedPlaylists = (listOf(newPlaylist) + playlists).distinctBy { it.id }.take(15)
         playlists = mergedPlaylists
 
-        val liveCount = newChannels.count { it.kind == MediaKind.LIVE }
-        val movieCount = newChannels.count { it.kind == MediaKind.MOVIES }
-        val seriesCount = newChannels.count { it.kind == MediaKind.SERIES }
+        val liveCount = cappedNew.count { it.kind == MediaKind.LIVE }
+        val movieCount = cappedNew.count { it.kind == MediaKind.MOVIES }
+        val seriesCount = cappedNew.count { it.kind == MediaKind.SERIES }
         val savedOk = persistNow(channels = mergedChannels, lists = mergedPlaylists)
         statusText = if (savedOk) {
             "Kaydedildi: $liveCount Canlı TV, $movieCount Film, $seriesCount Dizi"
         } else {
-            "Kayıt hatası (${lastSaveError ?: "Bilinmeyen"}): $liveCount TV, $movieCount Film, $seriesCount Dizi"
+            "Kayıt uyarısı (${lastSaveError ?: "Bilinmeyen"}): $liveCount TV, $movieCount Film, $seriesCount Dizi"
         }
 
         if (targetKind != null) {
@@ -3173,9 +3195,10 @@ private fun JoeApp() {
                     }
 
                     itemsIndexed(playlists, key = { idx, pl -> "${idx}-${pl.id}" }) { _, pl ->
-                        val liveCnt = pl.channels.count { it.kind == MediaKind.LIVE }
-                        val movieCnt = pl.channels.count { it.kind == MediaKind.MOVIES }
-                        val seriesCnt = pl.channels.count { it.kind == MediaKind.SERIES }
+                        val sourceList = if (pl.channels.isNotEmpty()) pl.channels else allChannels
+                        val liveCnt = sourceList.count { it.kind == MediaKind.LIVE }
+                        val movieCnt = sourceList.count { it.kind == MediaKind.MOVIES }
+                        val seriesCnt = sourceList.count { it.kind == MediaKind.SERIES }
                         val canRefresh = pl.sourceType != PlaylistSourceType.LOCAL_FILE &&
                             pl.sourceType != PlaylistSourceType.STREAM
 
@@ -3239,12 +3262,10 @@ private fun JoeApp() {
             }
 
             BottomRoute.SETTINGS -> {
-                val savedFile = remember(allChannels, playlists, lastSaveTimestamp) {
-                    File(context.filesDir, STATE_FILE_NAME)
-                }
-                val diskBytes = remember(allChannels, playlists, lastSaveTimestamp, currentRoute) {
-                    if (savedFile.exists()) savedFile.length() else 0L
-                }
+                val diskKb = runCatching {
+                    val f = File(context.filesDir, STATE_FILE_NAME)
+                    if (f.exists()) f.length() / 1024L else 0L
+                }.getOrDefault(0L)
 
                 LazyColumn(
                     modifier = Modifier
@@ -3276,7 +3297,7 @@ private fun JoeApp() {
                             ) {
                                 Text("Kayıt Durumu", fontWeight = FontWeight.Bold, color = AccentRed)
                                 Text(
-                                    text = "İçerik: ${allChannels.size} • Liste: ${playlists.size} • Disk: ${diskBytes / 1024} KB • Saat: ${formatClockTime(lastSaveTimestamp)}",
+                                    text = "İçerik: ${allChannels.size} • Liste: ${playlists.size} • Disk: ${diskKb} KB • Saat: ${formatClockTime(lastSaveTimestamp)}",
                                     fontSize = 12.sp,
                                     color = Color(0xFF222222)
                                 )
@@ -3727,12 +3748,16 @@ private fun parseSnapshotJson(raw: String): PersistentSnapshot? {
                 null
             }
 
+            val parsedPlChannels = parseChannelsArray(pObj.optJSONArray("channels") ?: JSONArray(), plXtream ?: xtream)
+            val summaryCount = pObj.optInt("itemCountSummary", parsedPlChannels.size.coerceAtLeast(channels.size))
+
             playlists.add(
                 SavedPlaylist(
                     id = pObj.optString("id", "pl-$i"),
                     title = pObj.optString("title", "Liste"),
                     sourceInfo = pObj.optString("sourceInfo", ""),
-                    channels = parseChannelsArray(pObj.optJSONArray("channels") ?: JSONArray(), plXtream ?: xtream),
+                    channels = parsedPlChannels,
+                    itemCountSummary = summaryCount,
                     sourceType = srcType,
                     preferredKind = prefKind,
                     xtreamCreds = plXtream,
@@ -3792,7 +3817,7 @@ private fun loadPersistentState(context: Context): PersistentSnapshot {
     }
 
     if (baseSnapshot == null) {
-        val legacyFiles = listOf("joe_player_state_v26.json", "joe_player_state.json")
+        val legacyFiles = listOf("joe_channels_v27.json", "joe_player_state_v26.json", "joe_player_state.json")
         for (fileName in legacyFiles) {
             val f = File(context.filesDir, fileName)
             if (f.exists() && f.length() > 0L) {
@@ -3883,6 +3908,7 @@ private fun savePersistentStateWithError(
                     put("id", pl.id)
                     put("title", pl.title)
                     put("sourceInfo", pl.sourceInfo)
+                    put("itemCountSummary", pl.itemCountSummary)
                     put("sourceType", pl.sourceType.name)
                     put("preferredKind", pl.preferredKind.name)
                     put("macPortalUrl", pl.macPortalUrl)
@@ -3917,7 +3943,7 @@ private fun savePersistentStateWithError(
             }
         }
 
-        if (jsonText.length < 750_000) {
+        if (jsonText.length < 500_000) {
             runCatching {
                 context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                     .edit()
@@ -3944,6 +3970,9 @@ private fun clearAllPersistentState(context: Context) {
             STATE_FILE_NAME,
             STATE_TEMP_FILE_NAME,
             RECENT_FILE_NAME,
+            "joe_channels_v27.json",
+            "joe_channels_v27.tmp",
+            "recent_watch_v27.json",
             "joe_player_state_v26.json",
             "joe_player_state_v26.tmp",
             "joe_player_state.json",
@@ -3951,7 +3980,7 @@ private fun clearAllPersistentState(context: Context) {
         ).forEach { name ->
             File(context.filesDir, name).delete()
         }
-        listOf(PREFS_NAME, "joe_player_prefs_v26", "joe_player_prefs_v25").forEach { prefName ->
+        listOf(PREFS_NAME, "joe_player_prefs_v27", "joe_player_prefs_v26", "joe_player_prefs_v25").forEach { prefName ->
             context.getSharedPreferences(prefName, Context.MODE_PRIVATE).edit().clear().commit()
         }
     }
@@ -4016,7 +4045,7 @@ private fun fetchAllXtreamMedia(
 
     val liveCatMap = parseCategoryMap(safeDownload(buildPlayerApiUrl(creds, "get_live_categories"), headers))
     val liveArray = parseJsonArrayFlexible(safeDownload(buildPlayerApiUrl(creds, "get_live_streams"), headers, "[]"))
-    for (i in 0 until liveArray.length()) {
+    for (i in 0 until minOf(liveArray.length(), 8_000)) {
         val obj = liveArray.optJSONObject(i) ?: continue
         val streamId = obj.optAnyString("stream_id", i.toString())
         val name = obj.optAnyString("name", "Canlı Kanal")
@@ -4038,7 +4067,7 @@ private fun fetchAllXtreamMedia(
 
     val vodCatMap = parseCategoryMap(safeDownload(buildPlayerApiUrl(creds, "get_vod_categories"), headers))
     val vodArray = parseJsonArrayFlexible(safeDownload(buildPlayerApiUrl(creds, "get_vod_streams"), headers, "[]"))
-    for (i in 0 until vodArray.length()) {
+    for (i in 0 until minOf(vodArray.length(), 5_000)) {
         val obj = vodArray.optJSONObject(i) ?: continue
         val streamId = obj.optAnyString("stream_id", i.toString())
         val name = obj.optAnyString("name", "Film")
@@ -4063,7 +4092,7 @@ private fun fetchAllXtreamMedia(
 
     val seriesCatMap = parseCategoryMap(safeDownload(buildPlayerApiUrl(creds, "get_series_categories"), headers))
     val seriesArray = parseJsonArrayFlexible(safeDownload(buildPlayerApiUrl(creds, "get_series"), headers, "[]"))
-    for (i in 0 until seriesArray.length()) {
+    for (i in 0 until minOf(seriesArray.length(), 3_000)) {
         val obj = seriesArray.optJSONObject(i) ?: continue
         val seriesId = obj.optAnyString("series_id", i.toString())
         val name = obj.optAnyString("name", "Dizi")
