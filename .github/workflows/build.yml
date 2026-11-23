@@ -33,11 +33,11 @@ jobs:
           fi
           chmod +x gradlew
 
-      - name: Generate JOE Logo Assets
+      - name: Generate JOE Logo, Splash Theme & Update Manifest
         run: |
           python3 -c '
           from PIL import Image, ImageDraw, ImageFont
-          import os
+          import os, re
 
           res_dirs = [
               "app/src/main/res/mipmap-mdpi",
@@ -82,6 +82,53 @@ jobs:
               icon.save(os.path.join(d, "ic_launcher.png"))
               icon.save(os.path.join(d, "ic_launcher_round.png"))
               icon.save(os.path.join(d, "joe_splash_logo.png"))
+
+          v31_dir = "app/src/main/res/values-v31"
+          os.makedirs(v31_dir, exist_ok=True)
+          with open(os.path.join(v31_dir, "styles.xml"), "w", encoding="utf-8") as f:
+              f.write("""<?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.JoeSplash" parent="android:Theme.Material.Light.NoActionBar">
+                  <item name="android:windowSplashScreenBackground">#140E0E</item>
+                  <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
+                  <item name="android:windowSplashScreenIconBackgroundColor">#E50914</item>
+              </style>
+          </resources>
+          """)
+
+          manifest_path = "app/src/main/AndroidManifest.xml"
+          if os.path.exists(manifest_path):
+              with open(manifest_path, "r", encoding="utf-8") as mf:
+                  xml = mf.read()
+
+              def patch_app_tag(m):
+                  tag = m.group(0)
+                  if "android:icon=" in tag:
+                      tag = re.sub(r\x27android:icon="[^"]*"\x27, \x27android:icon="@mipmap/ic_launcher"\x27, tag)
+                  else:
+                      tag = tag.replace("<application", \x27<application android:icon="@mipmap/ic_launcher"\x27, 1)
+                  if "android:roundIcon=" in tag:
+                      tag = re.sub(r\x27android:roundIcon="[^"]*"\x27, \x27android:roundIcon="@mipmap/ic_launcher_round"\x27, tag)
+                  else:
+                      tag = tag.replace("<application", \x27<application android:roundIcon="@mipmap/ic_launcher_round"\x27, 1)
+                  if "android:label=" in tag:
+                      tag = re.sub(r\x27android:label="[^"]*"\x27, \x27android:label="JOE"\x27, tag)
+                  else:
+                      tag = tag.replace("<application", \x27<application android:label="JOE"\x27, 1)
+                  return tag
+
+              xml = re.sub(r"<application\b[^>]*>", patch_app_tag, xml, count=1)
+
+              def patch_main_activity(m):
+                  tag = m.group(0)
+                  if "android:theme=" in tag:
+                      return re.sub(r\x27android:theme="[^"]*"\x27, \x27android:theme="@style/Theme.JoeSplash"\x27, tag)
+                  return tag.replace("<activity", \x27<activity android:theme="@style/Theme.JoeSplash"\x27, 1)
+
+              xml = re.sub(r"<activity\b[^>]*MainActivity[^>]*>", patch_main_activity, xml, count=1)
+
+              with open(manifest_path, "w", encoding="utf-8") as mf:
+                  mf.write(xml)
           '
 
       - name: Build Debug APK
