@@ -38,7 +38,8 @@ jobs:
           python3 - << 'EOF'
           import os
           import re
-          from PIL import Image, ImageDraw, ImageFont
+          import struct
+          import zlib
 
           res_dirs = [
               "app/src/main/res/mipmap-mdpi",
@@ -49,40 +50,110 @@ jobs:
               "app/src/main/res/drawable"
           ]
 
-          def make_joe_icon(size):
-              img = Image.new("RGBA", (size, size), (229, 9, 20, 255))
-              draw = ImageDraw.Draw(img)
-              pad = int(size * 0.14)
-              draw.rounded_rectangle(
-                  [pad, int(size * 0.22), size - pad, int(size * 0.78)],
-                  radius=max(8, int(size * 0.12)),
-                  outline=(255, 255, 255, 255),
-                  width=max(3, int(size * 0.04))
+          # 5x7 piksel blok font (J, O, E harfleri)
+          GLYPHS = {
+              'J': [
+                  "00111",
+                  "00010",
+                  "00010",
+                  "00010",
+                  "10010",
+                  "10010",
+                  "01100",
+              ],
+              'O': [
+                  "01110",
+                  "10001",
+                  "10001",
+                  "10001",
+                  "10001",
+                  "10001",
+                  "01110",
+              ],
+              'E': [
+                  "11111",
+                  "10000",
+                  "10000",
+                  "11110",
+                  "10000",
+                  "10000",
+                  "11111",
+              ],
+          }
+
+          def write_png_rgba(path, width, height, pixels):
+              def png_chunk(chunk_type, data):
+                  crc = zlib.crc32(chunk_type + data) & 0xFFFFFFFF
+                  return struct.pack("!I", len(data)) + chunk_type + data + struct.pack("!I", crc)
+
+              raw = bytearray()
+              for y in range(height):
+                  raw.append(0)
+                  row_start = y * width * 4
+                  raw.extend(pixels[row_start:row_start + width * 4])
+
+              ihdr = struct.pack("!IIBBBBB", width, height, 8, 6, 0, 0, 0)
+              idat = zlib.compress(bytes(raw), level=6)
+              png_bytes = (
+                  b"\x89PNG\r\n\x1a\n"
+                  + png_chunk(b"IHDR", ihdr)
+                  + png_chunk(b"IDAT", idat)
+                  + png_chunk(b"IEND", b"")
               )
-              font_size = max(14, int(size * 0.25))
-              font = None
-              for fp in [
-                  "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                  "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
-              ]:
-                  if os.path.exists(fp):
-                      font = ImageFont.truetype(fp, font_size)
-                      break
-              if font is None:
-                  font = ImageFont.load_default()
-              text = "JOE"
-              bbox = draw.textbbox((0, 0), text, font=font)
-              tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-              draw.text(((size - tw) / 2, (size - th) / 2 - size * 0.02), text, fill=(255, 255, 255, 255), font=font)
-              return img
+              with open(path, "wb") as f:
+                  f.write(png_bytes)
+
+          def make_joe_icon(size):
+              bg = (229, 9, 20, 255)      # Kırmızı tema (#E50914)
+              fg = (255, 255, 255, 255)   # Beyaz JOE yazısı & çerçeve
+              buf = bytearray(bg) * (size * size)
+
+              def set_px(x, y, col):
+                  if 0 <= x < size and 0 <= y < size:
+                      idx = (y * size + x) * 4
+                      buf[idx:idx + 4] = bytes(col)
+
+              # Dış çerçeve
+              border = max(2, size // 28)
+              pad = max(4, size // 10)
+              for t in range(border):
+                  for x in range(pad, size - pad):
+                      set_px(x, pad + t, fg)
+                      set_px(x, size - pad - 1 - t, fg)
+                  for y in range(pad, size - pad):
+                      set_px(pad + t, y, fg)
+                      set_px(size - pad - 1 - t, y, fg)
+
+              # Ortada "JOE" çizimi
+              word = "JOE"
+              scale = max(2, size // 28)
+              glyph_w = 5 * scale
+              glyph_h = 7 * scale
+              gap = max(2, scale)
+              total_w = len(word) * glyph_w + (len(word) - 1) * gap
+              start_x = (size - total_w) // 2
+              start_y = (size - glyph_h) // 2
+
+              for g_idx, ch in enumerate(word):
+                  pattern = GLYPHS.get(ch, [])
+                  gx0 = start_x + g_idx * (glyph_w + gap)
+                  for r_idx, row in enumerate(pattern):
+                      for c_idx, cell in enumerate(row):
+                          if cell == "1":
+                              px0 = gx0 + c_idx * scale
+                              py0 = start_y + r_idx * scale
+                              for dy in range(scale):
+                                  for dx in range(scale):
+                                      set_px(px0 + dx, py0 + dy, fg)
+
+              return buf
 
           for d in res_dirs:
               os.makedirs(d, exist_ok=True)
-              sz = 512 if d.endswith("drawable") else 192
-              icon = make_joe_icon(sz)
-              icon.save(os.path.join(d, "ic_launcher.png"))
-              icon.save(os.path.join(d, "ic_launcher_round.png"))
-              icon.save(os.path.join(d, "joe_splash_logo.png"))
+              sz = 256 if d.endswith("drawable") else 192
+              pixels = make_joe_icon(sz)
+              for fname in ["ic_launcher.png", "ic_launcher_round.png", "joe_splash_logo.png"]:
+                  write_png_rgba(os.path.join(d, fname), sz, sz, pixels)
 
           v31_dir = "app/src/main/res/values-v31"
           os.makedirs(v31_dir, exist_ok=True)
