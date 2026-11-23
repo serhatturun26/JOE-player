@@ -132,13 +132,8 @@ private data class selectableTrackOption(
 )
 
 enum class PlaylistSourceType {
-    STREAM,
     M3U8,
-    JSON,
-    HTML,
     XTREAM,
-    MAC_STB,
-    MHUB,
     GITHUB,
     LOCAL_FILE
 }
@@ -151,9 +146,7 @@ data class SavedPlaylist(
     val itemCountSummary: Int = channels.size,
     val sourceType: PlaylistSourceType = PlaylistSourceType.M3U8,
     val preferredKind: MediaKind = MediaKind.LIVE,
-    val xtreamCreds: XtreamCredentials? = null,
-    val macPortalUrl: String = "",
-    val macAddress: String = ""
+    val xtreamCreds: XtreamCredentials? = null
 )
 
 private enum class BottomRoute(val label: String) {
@@ -163,22 +156,13 @@ private enum class BottomRoute(val label: String) {
 }
 
 private enum class SourceSection(val title: String) {
-    STREAM("Ağ Akışı / Video Aç"),
-    M3U8("M3U8 (URL / Dosya) ile Ekle"),
-    JSON("JSON (URL/Dosya) ile Ekle"),
-    HTML("HTML (URL / Dosya) ile Ekle"),
     XTREAM("Xtream Hesabı ile Ekle"),
-    MAC_STB("MAC/STB Portal ile Ekle"),
-    MHUB("MediaHub / Açık Eklenti (mHub) ile Ekle"),
+    M3U8("M3U8 (URL / Dosya) ile Ekle"),
     GITHUB("Toplu Liste Ekle (GitHub)")
 }
 
 private enum class FileImportTarget {
-    M3U8,
-    JSON,
-    HTML,
-    MHUB,
-    VIDEO
+    M3U8
 }
 
 private enum class SortOrder(val label: String) {
@@ -191,11 +175,11 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v29"
-private const val KEY_STATE_JSON = "saved_state_json_v29"
-private const val STATE_FILE_NAME = "joe_channels_v29.json"
-private const val STATE_TEMP_FILE_NAME = "joe_channels_v29.tmp"
-private const val RECENT_FILE_NAME = "recent_watch_v29.json"
+private const val PREFS_NAME = "joe_player_prefs_v30"
+private const val KEY_STATE_JSON = "saved_state_json_v30"
+private const val STATE_FILE_NAME = "joe_channels_v30.json"
+private const val STATE_TEMP_FILE_NAME = "joe_channels_v30.tmp"
+private const val RECENT_FILE_NAME = "recent_watch_v30.json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
 
@@ -430,31 +414,14 @@ private fun JoeApp() {
     var defaultImportKind by remember { mutableStateOf(MediaKind.LIVE) }
     var activeFileTarget by remember { mutableStateOf(FileImportTarget.M3U8) }
 
-    var streamTitleInput by remember { mutableStateOf("") }
-    var streamUrlInput by remember { mutableStateOf("") }
-    var streamGroupInput by remember { mutableStateOf("Ağ Akışı") }
-
     var m3uNameInput by remember { mutableStateOf("") }
     var m3uUrlInput by remember { mutableStateOf("") }
-
-    var jsonNameInput by remember { mutableStateOf("") }
-    var jsonUrlInput by remember { mutableStateOf("") }
-
-    var htmlNameInput by remember { mutableStateOf("") }
-    var htmlUrlInput by remember { mutableStateOf("") }
 
     var xtreamNameInput by remember { mutableStateOf(savedSnapshot.lastListName) }
     var xtreamServerInput by remember { mutableStateOf(savedSnapshot.xtream?.serverUrl ?: "") }
     var xtreamUserInput by remember { mutableStateOf(savedSnapshot.xtream?.username ?: "") }
     var xtreamPassInput by remember { mutableStateOf(savedSnapshot.xtream?.password ?: "") }
     var showXtreamPassword by remember { mutableStateOf(false) }
-
-    var macPortalNameInput by remember { mutableStateOf("") }
-    var macPortalUrlInput by remember { mutableStateOf("") }
-    var macAddressInput by remember { mutableStateOf("") }
-
-    var mhubNameInput by remember { mutableStateOf("") }
-    var mhubUrlInput by remember { mutableStateOf("") }
 
     var githubNameInput by remember { mutableStateOf("") }
     var githubUrlInput by remember { mutableStateOf("") }
@@ -614,9 +581,9 @@ private fun JoeApp() {
     }
 
     fun refreshPlaylist(targetPlaylist: SavedPlaylist, silentAuto: Boolean = false) {
-        if (targetPlaylist.sourceType == PlaylistSourceType.LOCAL_FILE || targetPlaylist.sourceType == PlaylistSourceType.STREAM) {
+        if (targetPlaylist.sourceType == PlaylistSourceType.LOCAL_FILE) {
             if (!silentAuto) {
-                statusText = "\"${targetPlaylist.title}\" yerel/tekil kaynak olduğu için doğrudan yenilenemez."
+                statusText = "\"${targetPlaylist.title}\" yerel dosya olduğu için doğrudan yenilenemez."
             }
             return
         }
@@ -634,34 +601,14 @@ private fun JoeApp() {
                                 ?: throw IllegalStateException("Xtream bilgileri bulunamadı.")
                             fetchAllXtreamMedia(creds, hdrs)
                         }
-                        PlaylistSourceType.MAC_STB -> {
-                            fetchMacPortalChannels(
-                                portalUrl = targetPlaylist.macPortalUrl,
-                                macAddress = targetPlaylist.macAddress,
-                                headers = hdrs,
-                                fallbackKind = targetPlaylist.preferredKind
-                            )
-                        }
                         PlaylistSourceType.M3U8 -> {
                             val raw = downloadText(targetPlaylist.sourceInfo, hdrs)
                             parsePlaylistText(raw, "M3U8 Liste", targetPlaylist.preferredKind)
                         }
-                        PlaylistSourceType.JSON -> {
-                            val raw = downloadText(targetPlaylist.sourceInfo, hdrs)
-                            parseJsonPlaylist(raw, "JSON Liste", targetPlaylist.preferredKind)
-                        }
-                        PlaylistSourceType.HTML -> {
-                            val raw = downloadText(targetPlaylist.sourceInfo, hdrs)
-                            parseHtmlStreams(raw, targetPlaylist.sourceInfo, "HTML Yayınlar", targetPlaylist.preferredKind)
-                        }
-                        PlaylistSourceType.MHUB -> {
-                            val raw = downloadText(targetPlaylist.sourceInfo, hdrs)
-                            parseMhubPlugin(raw, targetPlaylist.preferredKind)
-                        }
                         PlaylistSourceType.GITHUB -> {
                             fetchGithubLists(targetPlaylist.sourceInfo, hdrs, targetPlaylist.preferredKind)
                         }
-                        PlaylistSourceType.STREAM, PlaylistSourceType.LOCAL_FILE -> emptyList()
+                        PlaylistSourceType.LOCAL_FILE -> emptyList()
                     }
                 }
 
@@ -719,7 +666,7 @@ private fun JoeApp() {
     fun triggerQuickListUpdate() {
         if (refreshingPlaylistId != null || isLoading) return
         val refreshableList = playlists.firstOrNull {
-            it.sourceType != PlaylistSourceType.LOCAL_FILE && it.sourceType != PlaylistSourceType.STREAM
+            it.sourceType != PlaylistSourceType.LOCAL_FILE
         }
         if (refreshableList != null) {
             refreshPlaylist(refreshableList, silentAuto = false)
@@ -781,7 +728,7 @@ private fun JoeApp() {
         if (!autoRefreshTriggered) {
             autoRefreshTriggered = true
             val refreshable = playlists.firstOrNull {
-                it.sourceType != PlaylistSourceType.LOCAL_FILE && it.sourceType != PlaylistSourceType.STREAM
+                it.sourceType != PlaylistSourceType.LOCAL_FILE
             }
             if (refreshable != null) {
                 refreshPlaylist(refreshable, silentAuto = true)
@@ -973,8 +920,6 @@ private fun JoeApp() {
         sourceType: PlaylistSourceType = PlaylistSourceType.M3U8,
         preferredKind: MediaKind = MediaKind.LIVE,
         xtreamCreds: XtreamCredentials? = null,
-        macPortalUrl: String = "",
-        macAddress: String = "",
         openPlayerFirst: ChannelEntry? = null,
         targetKind: MediaKind? = null
     ) {
@@ -996,9 +941,7 @@ private fun JoeApp() {
             itemCountSummary = cappedNew.size,
             sourceType = sourceType,
             preferredKind = preferredKind,
-            xtreamCreds = xtreamCreds,
-            macPortalUrl = macPortalUrl,
-            macAddress = macAddress
+            xtreamCreds = xtreamCreds
         )
         val mergedPlaylists = (listOf(newPlaylist) + playlists).distinctBy { it.id }.take(15)
         playlists = mergedPlaylists
@@ -1062,29 +1005,6 @@ private fun JoeApp() {
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            if (activeFileTarget == FileImportTarget.VIDEO) {
-                val chosenName = streamTitleInput.trim().ifEmpty {
-                    uri.lastPathSegment?.substringAfterLast('/')?.ifBlank { "Yerel Video" } ?: "Yerel Video"
-                }
-                val entry = ChannelEntry(
-                    id = "local-vid-${System.currentTimeMillis()}",
-                    name = chosenName,
-                    url = uri.toString(),
-                    group = streamGroupInput.trim().ifEmpty { "Yerel Medya" },
-                    kind = defaultImportKind
-                )
-                addImportedChannels(
-                    newChannels = listOf(entry),
-                    playlistTitle = chosenName,
-                    sourceInfo = "Yerel Video Dosyası",
-                    sourceType = PlaylistSourceType.LOCAL_FILE,
-                    preferredKind = defaultImportKind,
-                    openPlayerFirst = entry,
-                    targetKind = defaultImportKind
-                )
-                return@rememberLauncherForActivityResult
-            }
-
             scope.launch {
                 isLoading = true
                 statusText = null
@@ -1108,46 +1028,6 @@ private fun JoeApp() {
                             )
                             m3uNameInput = ""
                         }
-                        FileImportTarget.JSON -> {
-                            val parsed = parseJsonPlaylist(content, "JSON Liste", defaultImportKind)
-                            val title = jsonNameInput.trim().ifEmpty { "JSON Dosyası" }
-                            addImportedChannels(
-                                newChannels = parsed,
-                                playlistTitle = title,
-                                sourceInfo = "Yerel .json dosyası",
-                                sourceType = PlaylistSourceType.LOCAL_FILE,
-                                preferredKind = defaultImportKind,
-                                targetKind = defaultImportKind
-                            )
-                            jsonNameInput = ""
-                        }
-                        FileImportTarget.HTML -> {
-                            val parsed = parseHtmlStreams(content, "", "HTML Yayınlar", defaultImportKind)
-                            val title = htmlNameInput.trim().ifEmpty { "HTML Dosyası" }
-                            addImportedChannels(
-                                newChannels = parsed,
-                                playlistTitle = title,
-                                sourceInfo = "Yerel .html dosyası",
-                                sourceType = PlaylistSourceType.LOCAL_FILE,
-                                preferredKind = defaultImportKind,
-                                targetKind = defaultImportKind
-                            )
-                            htmlNameInput = ""
-                        }
-                        FileImportTarget.MHUB -> {
-                            val parsed = parseMhubPlugin(content, defaultImportKind)
-                            val title = mhubNameInput.trim().ifEmpty { "mHub Eklentisi" }
-                            addImportedChannels(
-                                newChannels = parsed,
-                                playlistTitle = title,
-                                sourceInfo = "Yerel mHub dosyası",
-                                sourceType = PlaylistSourceType.LOCAL_FILE,
-                                preferredKind = defaultImportKind,
-                                targetKind = defaultImportKind
-                            )
-                            mhubNameInput = ""
-                        }
-                        FileImportTarget.VIDEO -> Unit
                     }
                 } catch (e: Exception) {
                     statusText = "Dosya okunamadı: ${e.localizedMessage ?: "Hata"}"
@@ -2593,6 +2473,8 @@ private fun JoeApp() {
             }
 
             BottomRoute.PLAYLISTS -> {
+                val isUpdatingList = refreshingPlaylistId != null || isLoading
+
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
@@ -2602,12 +2484,37 @@ private fun JoeApp() {
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     item {
-                        Text(
-                            text = "Listelerim",
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF1A1A1A)
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Listelerim",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1A1A1A)
+                            )
+
+                            Button(
+                                onClick = { triggerQuickListUpdate() },
+                                enabled = !isUpdatingList,
+                                colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
+                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (isUpdatingList) "Güncelleniyor..." else "Listeyi Güncelle",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
                     }
 
                     item {
@@ -2633,7 +2540,7 @@ private fun JoeApp() {
                         }
                     }
 
-                    if (isLoading || refreshingPlaylistId != null) {
+                    if (isUpdatingList) {
                         item {
                             LinearProgressIndicator(
                                 modifier = Modifier.fillMaxWidth(),
@@ -2703,275 +2610,6 @@ private fun JoeApp() {
                                         verticalArrangement = Arrangement.spacedBy(10.dp)
                                     ) {
                                         when (section) {
-                                            SourceSection.STREAM -> {
-                                                OutlinedTextField(
-                                                    value = streamTitleInput,
-                                                    onValueChange = { streamTitleInput = it },
-                                                    label = { Text("Yayın / Video Adı") },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                OutlinedTextField(
-                                                    value = streamUrlInput,
-                                                    onValueChange = { streamUrlInput = it },
-                                                    label = { Text("Akış / Video Bağlantısı (.m3u8 / .mp4 / URL)") },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                OutlinedTextField(
-                                                    value = streamGroupInput,
-                                                    onValueChange = { streamGroupInput = it },
-                                                    label = { Text("Kategori") },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                                ) {
-                                                    Button(
-                                                        onClick = {
-                                                            val cleanUrl = streamUrlInput.trim()
-                                                            val cleanName = streamTitleInput.trim().ifEmpty { "Ağ Yayını" }
-                                                            val cleanGroup = streamGroupInput.trim().ifEmpty { "Ağ Akışı" }
-                                                            val item = ChannelEntry(
-                                                                id = "stream-${System.currentTimeMillis()}",
-                                                                name = cleanName,
-                                                                url = cleanUrl,
-                                                                group = cleanGroup,
-                                                                kind = defaultImportKind
-                                                            )
-                                                            addImportedChannels(
-                                                                newChannels = listOf(item),
-                                                                playlistTitle = cleanName,
-                                                                sourceInfo = "Ağ Akışı",
-                                                                sourceType = PlaylistSourceType.STREAM,
-                                                                preferredKind = defaultImportKind,
-                                                                openPlayerFirst = item,
-                                                                targetKind = defaultImportKind
-                                                            )
-                                                        },
-                                                        enabled = !isLoading && streamUrlInput.isNotBlank(),
-                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
-                                                        modifier = Modifier.weight(1f)
-                                                    ) {
-                                                        Icon(Icons.Default.PlayArrow, contentDescription = null)
-                                                        Spacer(modifier = Modifier.width(6.dp))
-                                                        Text("Aç ve Oynat")
-                                                    }
-
-                                                    OutlinedButton(
-                                                        onClick = {
-                                                            activeFileTarget = FileImportTarget.VIDEO
-                                                            filePickerLauncher.launch(arrayOf("video/*", "*/*"))
-                                                        },
-                                                        enabled = !isLoading
-                                                    ) {
-                                                        Icon(Icons.Default.FolderOpen, contentDescription = null)
-                                                        Spacer(modifier = Modifier.width(4.dp))
-                                                        Text("Video Seç")
-                                                    }
-                                                }
-                                            }
-
-                                            SourceSection.M3U8 -> {
-                                                OutlinedTextField(
-                                                    value = m3uNameInput,
-                                                    onValueChange = { m3uNameInput = it },
-                                                    label = { Text("Liste Adı (İsteğe bağlı)") },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                OutlinedTextField(
-                                                    value = m3uUrlInput,
-                                                    onValueChange = { m3uUrlInput = it },
-                                                    label = { Text("M3U / M3U8 URL") },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                                ) {
-                                                    Button(
-                                                        onClick = {
-                                                            val url = m3uUrlInput.trim()
-                                                            val hdrs = currentHeaders()
-                                                            scope.launch {
-                                                                isLoading = true
-                                                                statusText = null
-                                                                try {
-                                                                    val raw = withContext(Dispatchers.IO) {
-                                                                        downloadText(url, hdrs)
-                                                                    }
-                                                                    val parsed = parsePlaylistText(raw, "M3U8 Liste", defaultImportKind)
-                                                                    addImportedChannels(
-                                                                        newChannels = parsed,
-                                                                        playlistTitle = m3uNameInput.trim().ifEmpty { "M3U8 URL Listesi" },
-                                                                        sourceInfo = url,
-                                                                        sourceType = PlaylistSourceType.M3U8,
-                                                                        preferredKind = defaultImportKind,
-                                                                        targetKind = defaultImportKind
-                                                                    )
-                                                                    m3uUrlInput = ""
-                                                                } catch (e: Exception) {
-                                                                    statusText = "M3U8 yüklenemedi: ${e.localizedMessage ?: "Hata"}"
-                                                                } finally {
-                                                                    isLoading = false
-                                                                }
-                                                            }
-                                                        },
-                                                        enabled = !isLoading && m3uUrlInput.isNotBlank(),
-                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
-                                                        modifier = Modifier.weight(1f)
-                                                    ) {
-                                                        Text("URL Yükle")
-                                                    }
-
-                                                    OutlinedButton(
-                                                        onClick = {
-                                                            activeFileTarget = FileImportTarget.M3U8
-                                                            filePickerLauncher.launch(arrayOf("*/*"))
-                                                        },
-                                                        enabled = !isLoading
-                                                    ) {
-                                                        Text("Dosya Seç")
-                                                    }
-                                                }
-                                            }
-
-                                            SourceSection.JSON -> {
-                                                OutlinedTextField(
-                                                    value = jsonNameInput,
-                                                    onValueChange = { jsonNameInput = it },
-                                                    label = { Text("JSON Liste Adı (İsteğe bağlı)") },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                OutlinedTextField(
-                                                    value = jsonUrlInput,
-                                                    onValueChange = { jsonUrlInput = it },
-                                                    label = { Text("JSON URL") },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                                ) {
-                                                    Button(
-                                                        onClick = {
-                                                            val url = jsonUrlInput.trim()
-                                                            val hdrs = currentHeaders()
-                                                            scope.launch {
-                                                                isLoading = true
-                                                                statusText = null
-                                                                try {
-                                                                    val raw = withContext(Dispatchers.IO) {
-                                                                        downloadText(url, hdrs)
-                                                                    }
-                                                                    val parsed = parseJsonPlaylist(raw, "JSON Liste", defaultImportKind)
-                                                                    addImportedChannels(
-                                                                        newChannels = parsed,
-                                                                        playlistTitle = jsonNameInput.trim().ifEmpty { "JSON Listesi" },
-                                                                        sourceInfo = url,
-                                                                        sourceType = PlaylistSourceType.JSON,
-                                                                        preferredKind = defaultImportKind,
-                                                                        targetKind = defaultImportKind
-                                                                    )
-                                                                    jsonUrlInput = ""
-                                                                } catch (e: Exception) {
-                                                                    statusText = "JSON yüklenemedi: ${e.localizedMessage ?: "Hata"}"
-                                                                } finally {
-                                                                    isLoading = false
-                                                                }
-                                                            }
-                                                        },
-                                                        enabled = !isLoading && jsonUrlInput.isNotBlank(),
-                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
-                                                        modifier = Modifier.weight(1f)
-                                                    ) {
-                                                        Text("JSON Yükle")
-                                                    }
-
-                                                    OutlinedButton(
-                                                        onClick = {
-                                                            activeFileTarget = FileImportTarget.JSON
-                                                            filePickerLauncher.launch(arrayOf("application/json", "*/*"))
-                                                        },
-                                                        enabled = !isLoading
-                                                    ) {
-                                                        Text("Dosya Seç")
-                                                    }
-                                                }
-                                            }
-
-                                            SourceSection.HTML -> {
-                                                OutlinedTextField(
-                                                    value = htmlNameInput,
-                                                    onValueChange = { htmlNameInput = it },
-                                                    label = { Text("HTML Liste Adı (İsteğe bağlı)") },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                OutlinedTextField(
-                                                    value = htmlUrlInput,
-                                                    onValueChange = { htmlUrlInput = it },
-                                                    label = { Text("HTML Sayfa URL") },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                Row(
-                                                    modifier = Modifier.fillMaxWidth(),
-                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                                ) {
-                                                    Button(
-                                                        onClick = {
-                                                            val url = htmlUrlInput.trim()
-                                                            val hdrs = currentHeaders()
-                                                            scope.launch {
-                                                                isLoading = true
-                                                                statusText = null
-                                                                try {
-                                                                    val raw = withContext(Dispatchers.IO) {
-                                                                        downloadText(url, hdrs)
-                                                                    }
-                                                                    val parsed = parseHtmlStreams(raw, url, "HTML Yayınlar", defaultImportKind)
-                                                                    addImportedChannels(
-                                                                        newChannels = parsed,
-                                                                        playlistTitle = htmlNameInput.trim().ifEmpty { "HTML Listesi" },
-                                                                        sourceInfo = url,
-                                                                        sourceType = PlaylistSourceType.HTML,
-                                                                        preferredKind = defaultImportKind,
-                                                                        targetKind = defaultImportKind
-                                                                    )
-                                                                    htmlUrlInput = ""
-                                                                } catch (e: Exception) {
-                                                                    statusText = "HTML taranamadı: ${e.localizedMessage ?: "Hata"}"
-                                                                } finally {
-                                                                    isLoading = false
-                                                                }
-                                                            }
-                                                        },
-                                                        enabled = !isLoading && htmlUrlInput.isNotBlank(),
-                                                        colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
-                                                        modifier = Modifier.weight(1f)
-                                                    ) {
-                                                        Text("HTML Tara")
-                                                    }
-
-                                                    OutlinedButton(
-                                                        onClick = {
-                                                            activeFileTarget = FileImportTarget.HTML
-                                                            filePickerLauncher.launch(arrayOf("text/html", "*/*"))
-                                                        },
-                                                        enabled = !isLoading
-                                                    ) {
-                                                        Text("Dosya Seç")
-                                                    }
-                                                }
-                                            }
-
                                             SourceSection.XTREAM -> {
                                                 OutlinedTextField(
                                                     value = xtreamNameInput,
@@ -3067,82 +2705,18 @@ private fun JoeApp() {
                                                 }
                                             }
 
-                                            SourceSection.MAC_STB -> {
+                                            SourceSection.M3U8 -> {
                                                 OutlinedTextField(
-                                                    value = macPortalNameInput,
-                                                    onValueChange = { macPortalNameInput = it },
-                                                    label = { Text("Portal Adı (İsteğe bağlı)") },
+                                                    value = m3uNameInput,
+                                                    onValueChange = { m3uNameInput = it },
+                                                    label = { Text("Liste Adı (İsteğe bağlı)") },
                                                     singleLine = true,
                                                     modifier = Modifier.fillMaxWidth()
                                                 )
                                                 OutlinedTextField(
-                                                    value = macPortalUrlInput,
-                                                    onValueChange = { macPortalUrlInput = it },
-                                                    label = { Text("Portal URL (http://portal.com/c/)" ) },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                OutlinedTextField(
-                                                    value = macAddressInput,
-                                                    onValueChange = { macAddressInput = it },
-                                                    label = { Text("MAC Adresi (00:1A:79:XX:XX:XX)") },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                Button(
-                                                    onClick = {
-                                                        val portal = normalizeServerUrl(macPortalUrlInput)
-                                                        val mac = macAddressInput.trim().uppercase()
-                                                        val hdrs = currentHeaders()
-                                                        scope.launch {
-                                                            isLoading = true
-                                                            statusText = "MAC/STB portal kanalları çekiliyor..."
-                                                            try {
-                                                                val parsed = withContext(Dispatchers.IO) {
-                                                                    fetchMacPortalChannels(portal, mac, hdrs, defaultImportKind)
-                                                                }
-                                                                val title = macPortalNameInput.trim().ifEmpty { "MAC Portal ($mac)" }
-                                                                addImportedChannels(
-                                                                    newChannels = parsed,
-                                                                    playlistTitle = title,
-                                                                    sourceInfo = "$portal • $mac",
-                                                                    sourceType = PlaylistSourceType.MAC_STB,
-                                                                    preferredKind = defaultImportKind,
-                                                                    macPortalUrl = portal,
-                                                                    macAddress = mac,
-                                                                    targetKind = defaultImportKind
-                                                                )
-                                                            } catch (e: Exception) {
-                                                                statusText = "MAC Portal hatası: ${e.localizedMessage ?: "Bağlantı kurulamadı"}"
-                                                            } finally {
-                                                                isLoading = false
-                                                            }
-                                                        }
-                                                    },
-                                                    enabled = !isLoading && macPortalUrlInput.isNotBlank() && macAddressInput.isNotBlank(),
-                                                    colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .height(46.dp)
-                                                ) {
-                                                    Icon(Icons.Default.Tv, contentDescription = null)
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    Text("MAC Portal Bağlan")
-                                                }
-                                            }
-
-                                            SourceSection.MHUB -> {
-                                                OutlinedTextField(
-                                                    value = mhubNameInput,
-                                                    onValueChange = { mhubNameInput = it },
-                                                    label = { Text("mHub Eklenti Adı (İsteğe bağlı)") },
-                                                    singleLine = true,
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                OutlinedTextField(
-                                                    value = mhubUrlInput,
-                                                    onValueChange = { mhubUrlInput = it },
-                                                    label = { Text("mHub / Eklenti URL (.json / .m3u)") },
+                                                    value = m3uUrlInput,
+                                                    onValueChange = { m3uUrlInput = it },
+                                                    label = { Text("M3U / M3U8 URL") },
                                                     singleLine = true,
                                                     modifier = Modifier.fillMaxWidth()
                                                 )
@@ -3152,7 +2726,7 @@ private fun JoeApp() {
                                                 ) {
                                                     Button(
                                                         onClick = {
-                                                            val url = mhubUrlInput.trim()
+                                                            val url = m3uUrlInput.trim()
                                                             val hdrs = currentHeaders()
                                                             scope.launch {
                                                                 isLoading = true
@@ -3161,33 +2735,33 @@ private fun JoeApp() {
                                                                     val raw = withContext(Dispatchers.IO) {
                                                                         downloadText(url, hdrs)
                                                                     }
-                                                                    val parsed = parseMhubPlugin(raw, defaultImportKind)
+                                                                    val parsed = parsePlaylistText(raw, "M3U8 Liste", defaultImportKind)
                                                                     addImportedChannels(
                                                                         newChannels = parsed,
-                                                                        playlistTitle = mhubNameInput.trim().ifEmpty { "mHub Eklentisi" },
+                                                                        playlistTitle = m3uNameInput.trim().ifEmpty { "M3U8 URL Listesi" },
                                                                         sourceInfo = url,
-                                                                        sourceType = PlaylistSourceType.MHUB,
+                                                                        sourceType = PlaylistSourceType.M3U8,
                                                                         preferredKind = defaultImportKind,
                                                                         targetKind = defaultImportKind
                                                                     )
-                                                                    mhubUrlInput = ""
+                                                                    m3uUrlInput = ""
                                                                 } catch (e: Exception) {
-                                                                    statusText = "mHub yüklenemedi: ${e.localizedMessage ?: "Hata"}"
+                                                                    statusText = "M3U8 yüklenemedi: ${e.localizedMessage ?: "Hata"}"
                                                                 } finally {
                                                                     isLoading = false
                                                                 }
                                                             }
                                                         },
-                                                        enabled = !isLoading && mhubUrlInput.isNotBlank(),
+                                                        enabled = !isLoading && m3uUrlInput.isNotBlank(),
                                                         colors = ButtonDefaults.buttonColors(containerColor = AccentRed),
                                                         modifier = Modifier.weight(1f)
                                                     ) {
-                                                        Text("Eklentiyi Yükle")
+                                                        Text("URL Yükle")
                                                     }
 
                                                     OutlinedButton(
                                                         onClick = {
-                                                            activeFileTarget = FileImportTarget.MHUB
+                                                            activeFileTarget = FileImportTarget.M3U8
                                                             filePickerLauncher.launch(arrayOf("*/*"))
                                                         },
                                                         enabled = !isLoading
@@ -3329,8 +2903,7 @@ private fun JoeApp() {
                         val liveCnt = sourceList.count { it.kind == MediaKind.LIVE }
                         val movieCnt = sourceList.count { it.kind == MediaKind.MOVIES }
                         val seriesCnt = sourceList.count { it.kind == MediaKind.SERIES }
-                        val canRefresh = pl.sourceType != PlaylistSourceType.LOCAL_FILE &&
-                            pl.sourceType != PlaylistSourceType.STREAM
+                        val canRefresh = pl.sourceType != PlaylistSourceType.LOCAL_FILE
 
                         Card(
                             modifier = Modifier
@@ -3890,9 +3463,7 @@ private fun parseSnapshotJson(raw: String): PersistentSnapshot? {
                     itemCountSummary = summaryCount,
                     sourceType = srcType,
                     preferredKind = prefKind,
-                    xtreamCreds = plXtream,
-                    macPortalUrl = pObj.optString("macPortalUrl", ""),
-                    macAddress = pObj.optString("macAddress", "")
+                    xtreamCreds = plXtream
                 )
             )
         }
@@ -3947,7 +3518,7 @@ private fun loadPersistentState(context: Context): PersistentSnapshot {
     }
 
     if (baseSnapshot == null) {
-        val legacyFiles = listOf("joe_channels_v28.json", "joe_channels_v27.json", "joe_player_state_v26.json", "joe_player_state.json")
+        val legacyFiles = listOf("joe_channels_v29.json", "joe_channels_v28.json", "joe_channels_v27.json", "joe_player_state_v26.json", "joe_player_state.json")
         for (fileName in legacyFiles) {
             val f = File(context.filesDir, fileName)
             if (f.exists() && f.length() > 0L) {
@@ -4041,8 +3612,6 @@ private fun savePersistentStateWithError(
                     put("itemCountSummary", pl.itemCountSummary)
                     put("sourceType", pl.sourceType.name)
                     put("preferredKind", pl.preferredKind.name)
-                    put("macPortalUrl", pl.macPortalUrl)
-                    put("macAddress", pl.macAddress)
                     pl.xtreamCreds?.let { x ->
                         put(
                             "xtreamCreds",
@@ -4100,6 +3669,8 @@ private fun clearAllPersistentState(context: Context) {
             STATE_FILE_NAME,
             STATE_TEMP_FILE_NAME,
             RECENT_FILE_NAME,
+            "joe_channels_v29.json",
+            "joe_channels_v29.tmp",
             "joe_channels_v28.json",
             "joe_channels_v28.tmp",
             "joe_channels_v27.json",
@@ -4112,7 +3683,7 @@ private fun clearAllPersistentState(context: Context) {
         ).forEach { name ->
             File(context.filesDir, name).delete()
         }
-        listOf(PREFS_NAME, "joe_player_prefs_v28", "joe_player_prefs_v27", "joe_player_prefs_v26", "joe_player_prefs_v25").forEach { prefName ->
+        listOf(PREFS_NAME, "joe_player_prefs_v29", "joe_player_prefs_v28", "joe_player_prefs_v27", "joe_player_prefs_v26", "joe_player_prefs_v25").forEach { prefName ->
             context.getSharedPreferences(prefName, Context.MODE_PRIVATE).edit().clear().commit()
         }
     }
@@ -4287,48 +3858,6 @@ private fun fetchXtreamSeriesEpisodes(
     return list.sortedWith(compareBy({ it.season }, { it.episodeNum }))
 }
 
-private fun fetchMacPortalChannels(
-    portalUrl: String,
-    macAddress: String,
-    headers: CustomHeadersConfig,
-    fallbackKind: MediaKind
-): List<ChannelEntry> {
-    val baseRoot = portalUrl.removeSuffix("/c").removeSuffix("/c/")
-    val apiUrl = "$baseRoot/server/load.php?type=itv&action=get_all_channels&mac=${URLEncoder.encode(macAddress, "UTF-8")}"
-    val raw = downloadText(apiUrl, headers)
-    val root = JSONObject(raw)
-    val dataObj = root.optJSONObject("js") ?: root
-    val itemsArr = parseJsonArrayFlexible(dataObj.opt("data")?.toString() ?: raw)
-    val list = mutableListOf<ChannelEntry>()
-    for (i in 0 until itemsArr.length()) {
-        val obj = itemsArr.optJSONObject(i) ?: continue
-        val name = obj.optAnyString("name", "Portal Kanal ${i + 1}")
-        val cmd = obj.optAnyString("cmd").removePrefix("ffmpeg ").trim()
-        val streamUrl = if (cmd.startsWith("http://", true) || cmd.startsWith("https://", true)) {
-            cmd
-        } else {
-            val streamId = obj.optAnyString("id", i.toString())
-            "$baseRoot/play/live.php?mac=${URLEncoder.encode(macAddress, "UTF-8")}&stream=$streamId&extension=ts"
-        }
-        val group = obj.optAnyString("tv_genre_id", "MAC Portal")
-        val logo = obj.optAnyString("logo").takeIf { it.isNotBlank() }
-        list.add(
-            ChannelEntry(
-                id = "mac-$i-${name.hashCode()}",
-                name = name,
-                url = streamUrl,
-                group = group,
-                kind = detectMediaKind(group, name, fallbackKind),
-                posterUrl = logo
-            )
-        )
-    }
-    if (list.isEmpty()) {
-        throw IllegalStateException("MAC portaldan kanal listesi alınamadı.")
-    }
-    return list
-}
-
 private fun parseJsonPlaylist(
     rawText: String,
     defaultGroup: String,
@@ -4406,17 +3935,6 @@ private fun parseHtmlStreams(
         )
     }
     return list
-}
-
-private fun parseMhubPlugin(
-    rawText: String,
-    preferredKind: MediaKind
-): List<ChannelEntry> {
-    val trimmed = rawText.trim()
-    if (trimmed.startsWith("#EXTM3U") || trimmed.contains("#EXTINF:")) {
-        return parsePlaylistText(trimmed, "mHub Eklenti", preferredKind)
-    }
-    return parseJsonPlaylist(trimmed, "mHub Eklenti", preferredKind)
 }
 
 private fun fetchGithubLists(
