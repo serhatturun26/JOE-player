@@ -188,10 +188,10 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v25"
+private const val PREFS_NAME = "joe_player_prefs_v26"
 private const val KEY_STATE_JSON = "saved_state_json"
-private const val STATE_FILE_NAME = "joe_player_state.json"
-private const val STATE_TEMP_FILE_NAME = "joe_player_state.tmp"
+private const val STATE_FILE_NAME = "joe_player_state_v26.json"
+private const val STATE_TEMP_FILE_NAME = "joe_player_state_v26.tmp"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
 
@@ -489,8 +489,9 @@ private fun JoeApp() {
         recents: List<RecentWatchEntry> = recentWatches,
         autoPlay: Boolean = autoPlayOnSelect,
         zoomDefault: Boolean = fillScreenAspect,
-        startKind: MediaKind = defaultStartKind
-    ) {
+        startKind: MediaKind = defaultStartKind,
+        syncNow: Boolean = false
+    ): Boolean {
         val currentXtream = if (xtreamServerInput.isNotBlank() || xtreamUserInput.isNotBlank() || xtreamPassInput.isNotBlank()) {
             XtreamCredentials(
                 serverUrl = xtreamServerInput.trim(),
@@ -511,8 +512,12 @@ private fun JoeApp() {
             zoomToFillDefault = zoomDefault,
             defaultKind = startKind
         )
-        scope.launch(Dispatchers.IO) {
+        return if (syncNow) {
             savePersistentState(context = context, snapshot = snapshot)
+        } else {
+            runCatching {
+                savePersistentState(context = context, snapshot = snapshot)
+            }.getOrDefault(false)
         }
     }
 
@@ -535,7 +540,7 @@ private fun JoeApp() {
         val capped = updated.take(30)
         recentWatches = capped
         if (persistDisk) {
-            persistNow(recents = capped)
+            persistNow(recents = capped, syncNow = true)
         }
     }
 
@@ -577,7 +582,7 @@ private fun JoeApp() {
         playlists = updatedPlaylists
         recentWatches = updatedRecents
         statusText = "\"${targetPlaylist.title}\" listesi silindi."
-        persistNow(channels = updatedChannels, lists = updatedPlaylists, recents = updatedRecents)
+        persistNow(channels = updatedChannels, lists = updatedPlaylists, recents = updatedRecents, syncNow = true)
     }
 
     fun refreshPlaylist(targetPlaylist: SavedPlaylist) {
@@ -638,14 +643,20 @@ private fun JoeApp() {
                         ch.copy(isFavorite = fav)
                     }
                     val remaining = allChannels.filter { "${it.kind.name}-${it.id}-${it.url}" !in oldKeys }
-                    val mergedChannels = enriched + remaining
+                    val mergedChannels = (enriched + remaining).distinctBy { "${it.kind.name}-${it.id}-${it.url}" }
                     val updatedPlaylists = playlists.map { pl ->
                         if (pl.id == targetPlaylist.id) pl.copy(channels = enriched) else pl
                     }
                     allChannels = mergedChannels
                     playlists = updatedPlaylists
-                    persistNow(channels = mergedChannels, lists = updatedPlaylists)
-                    statusText = "\"${targetPlaylist.title}\" güncellendi (${enriched.size} içerik)."
+                    val savedOk = withContext(Dispatchers.IO) {
+                        persistNow(channels = mergedChannels, lists = updatedPlaylists, syncNow = true)
+                    }
+                    statusText = if (savedOk) {
+                        "\"${targetPlaylist.title}\" güncellendi ve kaydedildi (${enriched.size} içerik)."
+                    } else {
+                        "\"${targetPlaylist.title}\" güncellendi ancak diske yazılamadı!"
+                    }
                 }
             } catch (e: Exception) {
                 statusText = "Liste yenilenemedi: ${e.localizedMessage ?: "Bağlantı hatası"}"
@@ -768,6 +779,8 @@ private fun JoeApp() {
             if (ch != null && ch.url.isNotBlank()) {
                 val pos = runCatching { exoPlayer.currentPosition.coerceAtLeast(0L) }.getOrDefault(0L)
                 recordRecentWatch(ch, pos, persistDisk = true)
+            } else {
+                persistNow(syncNow = true)
             }
             exoPlayer.removeListener(listener)
             applyKeepScreenOn(activity, false)
@@ -807,7 +820,7 @@ private fun JoeApp() {
                         it.channel.id == current.id &&
                         it.channel.url == current.url
                 }?.lastPositionMs ?: 0L
-                recordRecentWatch(current, savedPos, persistDisk = false)
+                recordRecentWatch(current, savedPos, persistDisk = true)
                 exoPlayer.clearMediaItems()
                 exoPlayer.setMediaItem(MediaItem.fromUri(target))
                 if (current.kind != MediaKind.LIVE && savedPos > 2_000L) {
@@ -831,7 +844,7 @@ private fun JoeApp() {
             if (it.id == channelId) it.copy(isFavorite = !it.isFavorite) else it
         }
         allChannels = updated
-        persistNow(channels = updated)
+        persistNow(channels = updated, syncNow = true)
     }
 
     fun addImportedChannels(
@@ -852,7 +865,7 @@ private fun JoeApp() {
         }
         val existingKeys = allChannels.map { "${it.kind.name}-${it.id}-${it.url}" }.toSet()
         val uniqueChannels = newChannels.filter { "${it.kind.name}-${it.id}-${it.url}" !in existingKeys }
-        val mergedChannels = uniqueChannels + allChannels
+        val mergedChannels = (uniqueChannels + allChannels).distinctBy { "${it.kind.name}-${it.id}-${it.url}" }
         allChannels = mergedChannels
 
         val newPlaylist = SavedPlaylist(
@@ -866,14 +879,18 @@ private fun JoeApp() {
             macPortalUrl = macPortalUrl,
             macAddress = macAddress
         )
-        val mergedPlaylists = listOf(newPlaylist) + playlists
+        val mergedPlaylists = (listOf(newPlaylist) + playlists).distinctBy { it.id }
         playlists = mergedPlaylists
 
         val liveCount = newChannels.count { it.kind == MediaKind.LIVE }
         val movieCount = newChannels.count { it.kind == MediaKind.MOVIES }
         val seriesCount = newChannels.count { it.kind == MediaKind.SERIES }
-        statusText = "Yüklendi: $liveCount Canlı TV, $movieCount Film, $seriesCount Dizi"
-        persistNow(channels = mergedChannels, lists = mergedPlaylists)
+        val savedOk = persistNow(channels = mergedChannels, lists = mergedPlaylists, syncNow = true)
+        statusText = if (savedOk) {
+            "Kaydedildi: $liveCount Canlı TV, $movieCount Film, $seriesCount Dizi"
+        } else {
+            "Yüklendi ama kayıt hatası oluştu: $liveCount TV, $movieCount Film, $seriesCount Dizi"
+        }
 
         if (targetKind != null) {
             selectedMediaKind = targetKind
@@ -1043,9 +1060,7 @@ private fun JoeApp() {
                         selectedCategoryFilter = "Tümü"
                         onlyFavoritesFilter = false
                         settingsFeedback = "Tüm kayıtlı listeler ve geçmiş sıfırlandı."
-                        scope.launch(Dispatchers.IO) {
-                            clearAllPersistentState(context)
-                        }
+                        clearAllPersistentState(context)
                     }
                 ) {
                     Text("Sıfırla", color = AccentRed, fontWeight = FontWeight.Bold)
@@ -3099,7 +3114,7 @@ private fun JoeApp() {
                                 value = userAgentInput,
                                 onValueChange = {
                                     userAgentInput = it
-                                    persistNow()
+                                    persistNow(syncNow = true)
                                 },
                                 placeholder = { Text("User-Agent (gerekliyse)") },
                                 singleLine = true,
@@ -3112,7 +3127,7 @@ private fun JoeApp() {
                                 value = refererInput,
                                 onValueChange = {
                                     refererInput = it
-                                    persistNow()
+                                    persistNow(syncNow = true)
                                 },
                                 placeholder = { Text("Referer (gerekliyse)") },
                                 singleLine = true,
@@ -3125,7 +3140,7 @@ private fun JoeApp() {
                                 value = originInput,
                                 onValueChange = {
                                     originInput = it
-                                    persistNow()
+                                    persistNow(syncNow = true)
                                 },
                                 placeholder = { Text("Origin (gerekliyse)") },
                                 singleLine = true,
@@ -3215,6 +3230,11 @@ private fun JoeApp() {
             }
 
             BottomRoute.SETTINGS -> {
+                val savedFile = remember(allChannels, playlists) { File(context.filesDir, STATE_FILE_NAME) }
+                val diskBytes = remember(allChannels, playlists, currentRoute) {
+                    if (savedFile.exists()) savedFile.length() else 0L
+                }
+
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
@@ -3230,6 +3250,27 @@ private fun JoeApp() {
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF1A1A1A)
                         )
+                    }
+
+                    item {
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text("Kayıt Durumu", fontWeight = FontWeight.Bold, color = AccentRed)
+                                Text(
+                                    text = "Toplam İçerik: ${allChannels.size} • Liste: ${playlists.size} • Disk: ${diskBytes / 1024} KB",
+                                    fontSize = 12.sp,
+                                    color = Color(0xFF222222)
+                                )
+                            }
+                        }
                     }
 
                     if (settingsFeedback != null) {
@@ -3274,7 +3315,7 @@ private fun JoeApp() {
                                     checked = autoPlayOnSelect,
                                     onCheckedChange = {
                                         autoPlayOnSelect = it
-                                        persistNow(autoPlay = it)
+                                        persistNow(autoPlay = it, syncNow = true)
                                     }
                                 )
                             }
@@ -3305,7 +3346,7 @@ private fun JoeApp() {
                                     checked = fillScreenAspect,
                                     onCheckedChange = {
                                         fillScreenAspect = it
-                                        persistNow(zoomDefault = it)
+                                        persistNow(zoomDefault = it, syncNow = true)
                                     }
                                 )
                             }
@@ -3332,7 +3373,7 @@ private fun JoeApp() {
                                                 defaultStartKind = kind
                                                 selectedMediaKind = kind
                                                 selectedCategoryFilter = "Tümü"
-                                                persistNow(startKind = kind)
+                                                persistNow(startKind = kind, syncNow = true)
                                             },
                                             label = { Text(kind.label, maxLines = 1, fontSize = 12.sp) },
                                             colors = FilterChipDefaults.filterChipColors(
@@ -3362,7 +3403,7 @@ private fun JoeApp() {
                                 OutlinedButton(
                                     onClick = {
                                         recentWatches = emptyList()
-                                        persistNow(recents = emptyList())
+                                        persistNow(recents = emptyList(), syncNow = true)
                                         settingsFeedback = "Son izlenenler geçmişi temizlendi."
                                     },
                                     enabled = recentWatches.isNotEmpty(),
@@ -3691,7 +3732,19 @@ private fun loadPersistentState(context: Context): PersistentSnapshot {
         if (fromTemp != null) return fromTemp
     }
 
-    val legacyPrefsNames = listOf(PREFS_NAME, "joe_player_prefs_v24", "joe_player_prefs_v23")
+    val legacyFiles = listOf("joe_player_state.json", "joe_player_state.tmp")
+    for (fileName in legacyFiles) {
+        val f = File(context.filesDir, fileName)
+        if (f.exists() && f.length() > 0L) {
+            val parsed = runCatching { f.readText(StandardCharsets.UTF_8) }.getOrNull()?.let(::parseSnapshotJson)
+            if (parsed != null && (parsed.channels.isNotEmpty() || parsed.playlists.isNotEmpty())) {
+                savePersistentState(context, parsed)
+                return parsed
+            }
+        }
+    }
+
+    val legacyPrefsNames = listOf(PREFS_NAME, "joe_player_prefs_v25", "joe_player_prefs_v24", "joe_player_prefs_v23")
     for (prefName in legacyPrefsNames) {
         val raw = runCatching {
             context.getSharedPreferences(prefName, Context.MODE_PRIVATE).getString(KEY_STATE_JSON, null)
@@ -3731,8 +3784,8 @@ private fun parseChannelsArray(arr: JSONArray, fallbackXtream: XtreamCredentials
     return out
 }
 
-private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) {
-    runCatching {
+private fun savePersistentState(context: Context, snapshot: PersistentSnapshot): Boolean {
+    return runCatching {
         val root = JSONObject()
         root.put("lastListName", snapshot.lastListName)
         root.put("autoPlay", snapshot.autoPlay)
@@ -3810,16 +3863,27 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot) 
         if (stateFile.exists() && !stateFile.delete()) {
             stateFile.writeText(jsonText, StandardCharsets.UTF_8)
         } else {
-            tempFile.renameTo(stateFile)
+            val moved = tempFile.renameTo(stateFile)
+            if (!moved) {
+                stateFile.writeText(jsonText, StandardCharsets.UTF_8)
+                tempFile.delete()
+            }
         }
-    }
+        stateFile.exists() && stateFile.length() > 0L
+    }.getOrDefault(false)
 }
 
 private fun clearAllPersistentState(context: Context) {
     runCatching {
-        File(context.filesDir, STATE_FILE_NAME).delete()
-        File(context.filesDir, STATE_TEMP_FILE_NAME).delete()
-        listOf(PREFS_NAME, "joe_player_prefs_v24", "joe_player_prefs_v23").forEach { prefName ->
+        listOf(
+            STATE_FILE_NAME,
+            STATE_TEMP_FILE_NAME,
+            "joe_player_state.json",
+            "joe_player_state.tmp"
+        ).forEach { name ->
+            File(context.filesDir, name).delete()
+        }
+        listOf(PREFS_NAME, "joe_player_prefs_v25", "joe_player_prefs_v24", "joe_player_prefs_v23").forEach { prefName ->
             context.getSharedPreferences(prefName, Context.MODE_PRIVATE).edit().clear().apply()
         }
     }
