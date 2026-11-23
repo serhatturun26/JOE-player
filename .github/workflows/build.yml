@@ -33,6 +33,57 @@ jobs:
           fi
           chmod +x gradlew
 
+      - name: Generate JOE Logo Assets
+        run: |
+          python3 -c '
+          from PIL import Image, ImageDraw, ImageFont
+          import os
+
+          res_dirs = [
+              "app/src/main/res/mipmap-mdpi",
+              "app/src/main/res/mipmap-hdpi",
+              "app/src/main/res/mipmap-xhdpi",
+              "app/src/main/res/mipmap-xxhdpi",
+              "app/src/main/res/mipmap-xxxhdpi",
+              "app/src/main/res/drawable"
+          ]
+
+          def make_joe_icon(size):
+              img = Image.new("RGBA", (size, size), (229, 9, 20, 255))
+              draw = ImageDraw.Draw(img)
+              pad = int(size * 0.14)
+              draw.rounded_rectangle(
+                  [pad, int(size * 0.22), size - pad, int(size * 0.78)],
+                  radius=max(8, int(size * 0.12)),
+                  outline=(255, 255, 255, 255),
+                  width=max(3, int(size * 0.04))
+              )
+              font_size = max(14, int(size * 0.25))
+              font = None
+              for fp in [
+                  "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                  "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+              ]:
+                  if os.path.exists(fp):
+                      font = ImageFont.truetype(fp, font_size)
+                      break
+              if font is None:
+                  font = ImageFont.load_default()
+              text = "JOE"
+              bbox = draw.textbbox((0, 0), text, font=font)
+              tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+              draw.text(((size - tw) / 2, (size - th) / 2 - size * 0.02), text, fill=(255, 255, 255, 255), font=font)
+              return img
+
+          for d in res_dirs:
+              os.makedirs(d, exist_ok=True)
+              sz = 512 if d.endswith("drawable") else 192
+              icon = make_joe_icon(sz)
+              icon.save(os.path.join(d, "ic_launcher.png"))
+              icon.save(os.path.join(d, "ic_launcher_round.png"))
+              icon.save(os.path.join(d, "joe_splash_logo.png"))
+          '
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon
 
