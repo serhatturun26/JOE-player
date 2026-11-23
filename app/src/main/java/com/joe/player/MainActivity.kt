@@ -72,6 +72,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -188,14 +190,15 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v26"
-private const val KEY_STATE_JSON = "saved_state_json"
-private const val STATE_FILE_NAME = "joe_player_state_v26.json"
-private const val STATE_TEMP_FILE_NAME = "joe_player_state_v26.tmp"
+private const val PREFS_NAME = "joe_player_prefs_v27"
+private const val KEY_STATE_JSON = "saved_state_json_v27"
+private const val STATE_FILE_NAME = "joe_channels_v27.json"
+private const val STATE_TEMP_FILE_NAME = "joe_channels_v27.tmp"
+private const val RECENT_FILE_NAME = "recent_watch_v27.json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
 
-private val posterExecutor = Executors.newFixedThreadPool(3)
+private val posterExecutor = Executors.newFixedThreadPool(2)
 private val activePosterJobs = AtomicInteger(0)
 
 private fun normalizeLangTag(raw: String?): String {
@@ -317,6 +320,11 @@ private fun formatPlayerClock(ms: Long): String {
     }
 }
 
+private fun formatClockTime(millis: Long): String {
+    if (millis <= 0L) return "Henüz yok"
+    return SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(millis))
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -390,6 +398,8 @@ private fun JoeApp() {
     var recentWatches by remember { mutableStateOf(savedSnapshot.recentWatches) }
 
     var allChannels by remember { mutableStateOf(savedSnapshot.channels) }
+    var lastSaveTimestamp by remember { mutableLongStateOf(savedSnapshot.savedAtMillis) }
+    var lastSaveError by remember { mutableStateOf<String?>(null) }
 
     var activeChannel by remember { mutableStateOf<ChannelEntry?>(null) }
     var isPlayerFullScreen by remember { mutableStateOf(false) }
@@ -489,8 +499,7 @@ private fun JoeApp() {
         recents: List<RecentWatchEntry> = recentWatches,
         autoPlay: Boolean = autoPlayOnSelect,
         zoomDefault: Boolean = fillScreenAspect,
-        startKind: MediaKind = defaultStartKind,
-        syncNow: Boolean = false
+        startKind: MediaKind = defaultStartKind
     ): Boolean {
         val currentXtream = if (xtreamServerInput.isNotBlank() || xtreamUserInput.isNotBlank() || xtreamPassInput.isNotBlank()) {
             XtreamCredentials(
@@ -501,6 +510,7 @@ private fun JoeApp() {
         } else {
             null
         }
+        val nowMillis = System.currentTimeMillis()
         val snapshot = PersistentSnapshot(
             channels = channels,
             playlists = lists,
@@ -510,15 +520,17 @@ private fun JoeApp() {
             lastListName = xtreamNameInput,
             autoPlay = autoPlay,
             zoomToFillDefault = zoomDefault,
-            defaultKind = startKind
+            defaultKind = startKind,
+            savedAtMillis = nowMillis
         )
-        return if (syncNow) {
-            savePersistentState(context = context, snapshot = snapshot)
+        val result = savePersistentStateWithError(context = context, snapshot = snapshot)
+        if (result.first) {
+            lastSaveTimestamp = nowMillis
+            lastSaveError = null
         } else {
-            runCatching {
-                savePersistentState(context = context, snapshot = snapshot)
-            }.getOrDefault(false)
+            lastSaveError = result.second ?: "Yazma hatası"
         }
+        return result.first
     }
 
     fun recordRecentWatch(channel: ChannelEntry, positionMs: Long = 0L, persistDisk: Boolean = false) {
@@ -537,10 +549,10 @@ private fun JoeApp() {
         ) + recentWatches.filterNot {
             "${it.channel.kind.name}-${it.channel.id}-${it.channel.url}" == key
         }
-        val capped = updated.take(30)
+        val capped = updated.take(20)
         recentWatches = capped
         if (persistDisk) {
-            persistNow(recents = capped, syncNow = true)
+            saveRecentWatchesOnly(context, capped)
         }
     }
 
@@ -554,7 +566,6 @@ private fun JoeApp() {
         runCatching {
             playbackErrorMessage = null
             playbackStatusLabel = "Yeniden bağlanılıyor..."
-            exoPlayer.clearMediaItems()
             exoPlayer.setMediaItem(MediaItem.fromUri(target))
             exoPlayer.prepare()
             exoPlayer.playWhenReady = true
@@ -582,7 +593,7 @@ private fun JoeApp() {
         playlists = updatedPlaylists
         recentWatches = updatedRecents
         statusText = "\"${targetPlaylist.title}\" listesi silindi."
-        persistNow(channels = updatedChannels, lists = updatedPlaylists, recents = updatedRecents, syncNow = true)
+        persistNow(channels = updatedChannels, lists = updatedPlaylists, recents = updatedRecents)
     }
 
     fun refreshPlaylist(targetPlaylist: SavedPlaylist) {
@@ -650,12 +661,12 @@ private fun JoeApp() {
                     allChannels = mergedChannels
                     playlists = updatedPlaylists
                     val savedOk = withContext(Dispatchers.IO) {
-                        persistNow(channels = mergedChannels, lists = updatedPlaylists, syncNow = true)
+                        persistNow(channels = mergedChannels, lists = updatedPlaylists)
                     }
                     statusText = if (savedOk) {
                         "\"${targetPlaylist.title}\" güncellendi ve kaydedildi (${enriched.size} içerik)."
                     } else {
-                        "\"${targetPlaylist.title}\" güncellendi ancak diske yazılamadı!"
+                        "\"${targetPlaylist.title}\" güncellendi ama kayıt hatası: ${lastSaveError ?: ""}"
                     }
                 }
             } catch (e: Exception) {
@@ -743,7 +754,6 @@ private fun JoeApp() {
                     playbackStatusLabel = "Yeniden deneniyor ($liveAutoRetryCount/2)..."
                     playbackErrorMessage = null
                     runCatching {
-                        exoPlayer.clearMediaItems()
                         exoPlayer.setMediaItem(MediaItem.fromUri(current.url))
                         exoPlayer.prepare()
                         exoPlayer.playWhenReady = true
@@ -779,8 +789,6 @@ private fun JoeApp() {
             if (ch != null && ch.url.isNotBlank()) {
                 val pos = runCatching { exoPlayer.currentPosition.coerceAtLeast(0L) }.getOrDefault(0L)
                 recordRecentWatch(ch, pos, persistDisk = true)
-            } else {
-                persistNow(syncNow = true)
             }
             exoPlayer.removeListener(listener)
             applyKeepScreenOn(activity, false)
@@ -820,8 +828,7 @@ private fun JoeApp() {
                         it.channel.id == current.id &&
                         it.channel.url == current.url
                 }?.lastPositionMs ?: 0L
-                recordRecentWatch(current, savedPos, persistDisk = true)
-                exoPlayer.clearMediaItems()
+                recordRecentWatch(current, savedPos, persistDisk = false)
                 exoPlayer.setMediaItem(MediaItem.fromUri(target))
                 if (current.kind != MediaKind.LIVE && savedPos > 2_000L) {
                     exoPlayer.seekTo(savedPos)
@@ -844,7 +851,7 @@ private fun JoeApp() {
             if (it.id == channelId) it.copy(isFavorite = !it.isFavorite) else it
         }
         allChannels = updated
-        persistNow(channels = updated, syncNow = true)
+        persistNow(channels = updated)
     }
 
     fun addImportedChannels(
@@ -885,11 +892,11 @@ private fun JoeApp() {
         val liveCount = newChannels.count { it.kind == MediaKind.LIVE }
         val movieCount = newChannels.count { it.kind == MediaKind.MOVIES }
         val seriesCount = newChannels.count { it.kind == MediaKind.SERIES }
-        val savedOk = persistNow(channels = mergedChannels, lists = mergedPlaylists, syncNow = true)
+        val savedOk = persistNow(channels = mergedChannels, lists = mergedPlaylists)
         statusText = if (savedOk) {
             "Kaydedildi: $liveCount Canlı TV, $movieCount Film, $seriesCount Dizi"
         } else {
-            "Yüklendi ama kayıt hatası oluştu: $liveCount TV, $movieCount Film, $seriesCount Dizi"
+            "Kayıt hatası (${lastSaveError ?: "Bilinmeyen"}): $liveCount TV, $movieCount Film, $seriesCount Dizi"
         }
 
         if (targetKind != null) {
@@ -1059,6 +1066,8 @@ private fun JoeApp() {
                         originInput = ""
                         selectedCategoryFilter = "Tümü"
                         onlyFavoritesFilter = false
+                        lastSaveTimestamp = 0L
+                        lastSaveError = null
                         settingsFeedback = "Tüm kayıtlı listeler ve geçmiş sıfırlandı."
                         clearAllPersistentState(context)
                     }
@@ -3114,7 +3123,7 @@ private fun JoeApp() {
                                 value = userAgentInput,
                                 onValueChange = {
                                     userAgentInput = it
-                                    persistNow(syncNow = true)
+                                    persistNow()
                                 },
                                 placeholder = { Text("User-Agent (gerekliyse)") },
                                 singleLine = true,
@@ -3127,7 +3136,7 @@ private fun JoeApp() {
                                 value = refererInput,
                                 onValueChange = {
                                     refererInput = it
-                                    persistNow(syncNow = true)
+                                    persistNow()
                                 },
                                 placeholder = { Text("Referer (gerekliyse)") },
                                 singleLine = true,
@@ -3140,7 +3149,7 @@ private fun JoeApp() {
                                 value = originInput,
                                 onValueChange = {
                                     originInput = it
-                                    persistNow(syncNow = true)
+                                    persistNow()
                                 },
                                 placeholder = { Text("Origin (gerekliyse)") },
                                 singleLine = true,
@@ -3230,8 +3239,10 @@ private fun JoeApp() {
             }
 
             BottomRoute.SETTINGS -> {
-                val savedFile = remember(allChannels, playlists) { File(context.filesDir, STATE_FILE_NAME) }
-                val diskBytes = remember(allChannels, playlists, currentRoute) {
+                val savedFile = remember(allChannels, playlists, lastSaveTimestamp) {
+                    File(context.filesDir, STATE_FILE_NAME)
+                }
+                val diskBytes = remember(allChannels, playlists, lastSaveTimestamp, currentRoute) {
                     if (savedFile.exists()) savedFile.length() else 0L
                 }
 
@@ -3265,10 +3276,18 @@ private fun JoeApp() {
                             ) {
                                 Text("Kayıt Durumu", fontWeight = FontWeight.Bold, color = AccentRed)
                                 Text(
-                                    text = "Toplam İçerik: ${allChannels.size} • Liste: ${playlists.size} • Disk: ${diskBytes / 1024} KB",
+                                    text = "İçerik: ${allChannels.size} • Liste: ${playlists.size} • Disk: ${diskBytes / 1024} KB • Saat: ${formatClockTime(lastSaveTimestamp)}",
                                     fontSize = 12.sp,
                                     color = Color(0xFF222222)
                                 )
+                                if (lastSaveError != null) {
+                                    Text(
+                                        text = "Kayıt Uyarısı: $lastSaveError",
+                                        fontSize = 12.sp,
+                                        color = AccentRed,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
                             }
                         }
                     }
@@ -3315,7 +3334,7 @@ private fun JoeApp() {
                                     checked = autoPlayOnSelect,
                                     onCheckedChange = {
                                         autoPlayOnSelect = it
-                                        persistNow(autoPlay = it, syncNow = true)
+                                        persistNow(autoPlay = it)
                                     }
                                 )
                             }
@@ -3346,7 +3365,7 @@ private fun JoeApp() {
                                     checked = fillScreenAspect,
                                     onCheckedChange = {
                                         fillScreenAspect = it
-                                        persistNow(zoomDefault = it, syncNow = true)
+                                        persistNow(zoomDefault = it)
                                     }
                                 )
                             }
@@ -3373,7 +3392,7 @@ private fun JoeApp() {
                                                 defaultStartKind = kind
                                                 selectedMediaKind = kind
                                                 selectedCategoryFilter = "Tümü"
-                                                persistNow(startKind = kind, syncNow = true)
+                                                persistNow(startKind = kind)
                                             },
                                             label = { Text(kind.label, maxLines = 1, fontSize = 12.sp) },
                                             colors = FilterChipDefaults.filterChipColors(
@@ -3403,7 +3422,7 @@ private fun JoeApp() {
                                 OutlinedButton(
                                     onClick = {
                                         recentWatches = emptyList()
-                                        persistNow(recents = emptyList(), syncNow = true)
+                                        saveRecentWatchesOnly(context, emptyList())
                                         settingsFeedback = "Son izlenenler geçmişi temizlendi."
                                     },
                                     enabled = recentWatches.isNotEmpty(),
@@ -3527,7 +3546,7 @@ private fun MediaShelfCard(
                             update = { iv ->
                                 iv.setImageDrawable(null)
                                 iv.tag = posterUrl
-                                if (activePosterJobs.get() < 6) {
+                                if (activePosterJobs.get() < 4) {
                                     activePosterJobs.incrementAndGet()
                                     posterExecutor.execute {
                                         try {
@@ -3570,10 +3589,10 @@ private fun MediaShelfCard(
 private fun downloadBitmapSafe(imageUrl: String): android.graphics.Bitmap? {
     var currentUrl = imageUrl
     var redirects = 0
-    while (redirects < 3) {
+    while (redirects < 2) {
         val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 3000
-            readTimeout = 4000
+            connectTimeout = 1800
+            readTimeout = 2200
             requestMethod = "GET"
             instanceFollowRedirects = false
             setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
@@ -3588,7 +3607,7 @@ private fun downloadBitmapSafe(imageUrl: String): android.graphics.Bitmap? {
             }
             if (code !in 200..299) return null
             val bytes = conn.inputStream.use { it.readBytes() }
-            if (bytes.isEmpty() || bytes.size > 1_500_000) return null
+            if (bytes.isEmpty() || bytes.size > 1_000_000) return null
             val opts = BitmapFactory.Options().apply {
                 inSampleSize = 4
             }
@@ -3609,8 +3628,49 @@ private data class PersistentSnapshot(
     val lastListName: String = "",
     val autoPlay: Boolean = true,
     val zoomToFillDefault: Boolean = true,
-    val defaultKind: MediaKind = MediaKind.LIVE
+    val defaultKind: MediaKind = MediaKind.LIVE,
+    val savedAtMillis: Long = 0L
 )
+
+private fun parseRecentWatchesJson(raw: String, fallbackXtream: XtreamCredentials?): List<RecentWatchEntry> {
+    if (raw.isBlank()) return emptyList()
+    return runCatching {
+        val arr = JSONArray(raw)
+        val out = mutableListOf<RecentWatchEntry>()
+        for (i in 0 until arr.length()) {
+            val rObj = arr.optJSONObject(i) ?: continue
+            val chObj = rObj.optJSONObject("channel") ?: continue
+            val parsedCh = parseChannelsArray(JSONArray().put(chObj), fallbackXtream).firstOrNull() ?: continue
+            out.add(
+                RecentWatchEntry(
+                    channel = parsedCh,
+                    lastPositionMs = rObj.optLong("lastPositionMs", 0L),
+                    lastWatchedAt = rObj.optLong("lastWatchedAt", 0L)
+                )
+            )
+        }
+        out
+    }.getOrDefault(emptyList())
+}
+
+private fun saveRecentWatchesOnly(context: Context, recents: List<RecentWatchEntry>) {
+    runCatching {
+        val recArr = JSONArray()
+        recents.take(20).forEach { rec ->
+            val chJson = channelsToJsonArray(listOf(rec.channel)).optJSONObject(0)
+            if (chJson != null) {
+                recArr.put(
+                    JSONObject().apply {
+                        put("channel", chJson)
+                        put("lastPositionMs", rec.lastPositionMs)
+                        put("lastWatchedAt", rec.lastWatchedAt)
+                    }
+                )
+            }
+        }
+        File(context.filesDir, RECENT_FILE_NAME).writeText(recArr.toString(), StandardCharsets.UTF_8)
+    }
+}
 
 private fun parseSnapshotJson(raw: String): PersistentSnapshot? {
     if (raw.isBlank()) return null
@@ -3682,20 +3742,10 @@ private fun parseSnapshotJson(raw: String): PersistentSnapshot? {
             )
         }
 
-        val recentWatches = mutableListOf<RecentWatchEntry>()
-        val recArr = root.optJSONArray("recentWatches") ?: JSONArray()
-        for (i in 0 until recArr.length()) {
-            val rObj = recArr.optJSONObject(i) ?: continue
-            val chObj = rObj.optJSONObject("channel") ?: continue
-            val parsedCh = parseChannelsArray(JSONArray().put(chObj), xtream).firstOrNull() ?: continue
-            recentWatches.add(
-                RecentWatchEntry(
-                    channel = parsedCh,
-                    lastPositionMs = rObj.optLong("lastPositionMs", 0L),
-                    lastWatchedAt = rObj.optLong("lastWatchedAt", 0L)
-                )
-            )
-        }
+        val recentWatches = parseRecentWatchesJson(
+            root.optJSONArray("recentWatches")?.toString().orEmpty(),
+            xtream
+        )
 
         val kindName = root.optString("defaultKind", MediaKind.LIVE.name)
         val parsedKind = runCatching { MediaKind.valueOf(kindName) }.getOrDefault(MediaKind.LIVE)
@@ -3709,7 +3759,8 @@ private fun parseSnapshotJson(raw: String): PersistentSnapshot? {
             lastListName = root.optString("lastListName", ""),
             autoPlay = root.optBoolean("autoPlay", true),
             zoomToFillDefault = root.optBoolean("zoomToFillDefault", true),
-            defaultKind = parsedKind
+            defaultKind = parsedKind,
+            savedAtMillis = root.optLong("savedAtMillis", 0L)
         )
     }.getOrNull()
 }
@@ -3717,46 +3768,53 @@ private fun parseSnapshotJson(raw: String): PersistentSnapshot? {
 private fun loadPersistentState(context: Context): PersistentSnapshot {
     val stateFile = File(context.filesDir, STATE_FILE_NAME)
     val tempFile = File(context.filesDir, STATE_TEMP_FILE_NAME)
+    val recentFile = File(context.filesDir, RECENT_FILE_NAME)
+
+    var baseSnapshot: PersistentSnapshot? = null
 
     if (stateFile.exists() && stateFile.length() > 0L) {
-        val fromFile = runCatching { stateFile.readText(StandardCharsets.UTF_8) }
+        baseSnapshot = runCatching { stateFile.readText(StandardCharsets.UTF_8) }
             .getOrNull()
             ?.let(::parseSnapshotJson)
-        if (fromFile != null) return fromFile
     }
 
-    if (tempFile.exists() && tempFile.length() > 0L) {
-        val fromTemp = runCatching { tempFile.readText(StandardCharsets.UTF_8) }
+    if (baseSnapshot == null && tempFile.exists() && tempFile.length() > 0L) {
+        baseSnapshot = runCatching { tempFile.readText(StandardCharsets.UTF_8) }
             .getOrNull()
             ?.let(::parseSnapshotJson)
-        if (fromTemp != null) return fromTemp
     }
 
-    val legacyFiles = listOf("joe_player_state.json", "joe_player_state.tmp")
-    for (fileName in legacyFiles) {
-        val f = File(context.filesDir, fileName)
-        if (f.exists() && f.length() > 0L) {
-            val parsed = runCatching { f.readText(StandardCharsets.UTF_8) }.getOrNull()?.let(::parseSnapshotJson)
-            if (parsed != null && (parsed.channels.isNotEmpty() || parsed.playlists.isNotEmpty())) {
-                savePersistentState(context, parsed)
-                return parsed
+    if (baseSnapshot == null) {
+        val prefRaw = runCatching {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getString(KEY_STATE_JSON, null)
+        }.getOrNull().orEmpty()
+        baseSnapshot = parseSnapshotJson(prefRaw)
+    }
+
+    if (baseSnapshot == null) {
+        val legacyFiles = listOf("joe_player_state_v26.json", "joe_player_state.json")
+        for (fileName in legacyFiles) {
+            val f = File(context.filesDir, fileName)
+            if (f.exists() && f.length() > 0L) {
+                val parsed = runCatching { f.readText(StandardCharsets.UTF_8) }.getOrNull()?.let(::parseSnapshotJson)
+                if (parsed != null && (parsed.channels.isNotEmpty() || parsed.playlists.isNotEmpty())) {
+                    baseSnapshot = parsed
+                    savePersistentStateWithError(context, parsed)
+                    break
+                }
             }
         }
     }
 
-    val legacyPrefsNames = listOf(PREFS_NAME, "joe_player_prefs_v25", "joe_player_prefs_v24", "joe_player_prefs_v23")
-    for (prefName in legacyPrefsNames) {
-        val raw = runCatching {
-            context.getSharedPreferences(prefName, Context.MODE_PRIVATE).getString(KEY_STATE_JSON, null)
-        }.getOrNull().orEmpty()
-        val parsed = parseSnapshotJson(raw)
-        if (parsed != null && (parsed.channels.isNotEmpty() || parsed.playlists.isNotEmpty())) {
-            savePersistentState(context, parsed)
-            return parsed
-        }
+    val resolved = baseSnapshot ?: PersistentSnapshot()
+    val recentsFromFile = if (recentFile.exists() && recentFile.length() > 0L) {
+        val rawRec = runCatching { recentFile.readText(StandardCharsets.UTF_8) }.getOrNull().orEmpty()
+        parseRecentWatchesJson(rawRec, resolved.xtream)
+    } else {
+        resolved.recentWatches
     }
 
-    return PersistentSnapshot()
+    return resolved.copy(recentWatches = recentsFromFile)
 }
 
 private fun parseChannelsArray(arr: JSONArray, fallbackXtream: XtreamCredentials?): List<ChannelEntry> {
@@ -3784,13 +3842,17 @@ private fun parseChannelsArray(arr: JSONArray, fallbackXtream: XtreamCredentials
     return out
 }
 
-private fun savePersistentState(context: Context, snapshot: PersistentSnapshot): Boolean {
-    return runCatching {
+private fun savePersistentStateWithError(
+    context: Context,
+    snapshot: PersistentSnapshot
+): Pair<Boolean, String?> {
+    return try {
         val root = JSONObject()
         root.put("lastListName", snapshot.lastListName)
         root.put("autoPlay", snapshot.autoPlay)
         root.put("zoomToFillDefault", snapshot.zoomToFillDefault)
         root.put("defaultKind", snapshot.defaultKind.name)
+        root.put("savedAtMillis", snapshot.savedAtMillis)
 
         snapshot.xtream?.let { x ->
             root.put(
@@ -3841,21 +3903,6 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot):
         }
         root.put("playlists", plArr)
 
-        val recArr = JSONArray()
-        snapshot.recentWatches.forEach { rec ->
-            val chJson = channelsToJsonArray(listOf(rec.channel)).optJSONObject(0)
-            if (chJson != null) {
-                recArr.put(
-                    JSONObject().apply {
-                        put("channel", chJson)
-                        put("lastPositionMs", rec.lastPositionMs)
-                        put("lastWatchedAt", rec.lastWatchedAt)
-                    }
-                )
-            }
-        }
-        root.put("recentWatches", recArr)
-
         val jsonText = root.toString()
         val stateFile = File(context.filesDir, STATE_FILE_NAME)
         val tempFile = File(context.filesDir, STATE_TEMP_FILE_NAME)
@@ -3869,8 +3916,26 @@ private fun savePersistentState(context: Context, snapshot: PersistentSnapshot):
                 tempFile.delete()
             }
         }
-        stateFile.exists() && stateFile.length() > 0L
-    }.getOrDefault(false)
+
+        if (jsonText.length < 750_000) {
+            runCatching {
+                context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(KEY_STATE_JSON, jsonText)
+                    .commit()
+            }
+        }
+
+        saveRecentWatchesOnly(context, snapshot.recentWatches)
+
+        if (stateFile.exists() && stateFile.length() > 0L) {
+            true to null
+        } else {
+            false to "Dosya oluşturulamadı veya boyutu 0"
+        }
+    } catch (e: Exception) {
+        false to (e.localizedMessage ?: e.javaClass.simpleName)
+    }
 }
 
 private fun clearAllPersistentState(context: Context) {
@@ -3878,13 +3943,16 @@ private fun clearAllPersistentState(context: Context) {
         listOf(
             STATE_FILE_NAME,
             STATE_TEMP_FILE_NAME,
+            RECENT_FILE_NAME,
+            "joe_player_state_v26.json",
+            "joe_player_state_v26.tmp",
             "joe_player_state.json",
             "joe_player_state.tmp"
         ).forEach { name ->
             File(context.filesDir, name).delete()
         }
-        listOf(PREFS_NAME, "joe_player_prefs_v25", "joe_player_prefs_v24", "joe_player_prefs_v23").forEach { prefName ->
-            context.getSharedPreferences(prefName, Context.MODE_PRIVATE).edit().clear().apply()
+        listOf(PREFS_NAME, "joe_player_prefs_v26", "joe_player_prefs_v25").forEach { prefName ->
+            context.getSharedPreferences(prefName, Context.MODE_PRIVATE).edit().clear().commit()
         }
     }
 }
