@@ -191,11 +191,11 @@ private val AccentRed = Color(0xFFE50914)
 private val CardDarkBg = Color(0xFF242020)
 private val ChipDarkBg = Color(0xFF181212)
 private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v28"
-private const val KEY_STATE_JSON = "saved_state_json_v28"
-private const val STATE_FILE_NAME = "joe_channels_v28.json"
-private const val STATE_TEMP_FILE_NAME = "joe_channels_v28.tmp"
-private const val RECENT_FILE_NAME = "recent_watch_v28.json"
+private const val PREFS_NAME = "joe_player_prefs_v29"
+private const val KEY_STATE_JSON = "saved_state_json_v29"
+private const val STATE_FILE_NAME = "joe_channels_v29.json"
+private const val STATE_TEMP_FILE_NAME = "joe_channels_v29.tmp"
+private const val RECENT_FILE_NAME = "recent_watch_v29.json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
 
@@ -469,6 +469,7 @@ private fun JoeApp() {
     var statusText by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var refreshingPlaylistId by remember { mutableStateOf<String?>(null) }
+    var autoRefreshTriggered by remember { mutableStateOf(false) }
 
     val trackSelector = remember {
         DefaultTrackSelector(context).apply {
@@ -494,6 +495,21 @@ private fun JoeApp() {
         )
     }
 
+    fun resolveActiveXtreamCreds(): XtreamCredentials? {
+        val fromInputs = if (xtreamServerInput.isNotBlank() && xtreamUserInput.isNotBlank() && xtreamPassInput.isNotBlank()) {
+            XtreamCredentials(
+                serverUrl = normalizeServerUrl(xtreamServerInput),
+                username = xtreamUserInput.trim(),
+                password = xtreamPassInput.trim()
+            )
+        } else {
+            null
+        }
+        return fromInputs
+            ?: playlists.firstOrNull { it.sourceType == PlaylistSourceType.XTREAM && it.xtreamCreds != null }?.xtreamCreds
+            ?: savedSnapshot.xtream
+    }
+
     fun persistNow(
         channels: List<ChannelEntry> = allChannels,
         lists: List<SavedPlaylist> = playlists,
@@ -502,15 +518,7 @@ private fun JoeApp() {
         zoomDefault: Boolean = fillScreenAspect,
         startKind: MediaKind = defaultStartKind
     ): Boolean {
-        val currentXtream = if (xtreamServerInput.isNotBlank() || xtreamUserInput.isNotBlank() || xtreamPassInput.isNotBlank()) {
-            XtreamCredentials(
-                serverUrl = xtreamServerInput.trim(),
-                username = xtreamUserInput.trim(),
-                password = xtreamPassInput.trim()
-            )
-        } else {
-            null
-        }
+        val currentXtream = resolveActiveXtreamCreds()
         val nowMillis = System.currentTimeMillis()
         val snapshot = PersistentSnapshot(
             channels = channels,
@@ -605,20 +613,24 @@ private fun JoeApp() {
         persistNow(channels = updatedChannels, lists = updatedPlaylists, recents = updatedRecents)
     }
 
-    fun refreshPlaylist(targetPlaylist: SavedPlaylist) {
+    fun refreshPlaylist(targetPlaylist: SavedPlaylist, silentAuto: Boolean = false) {
         if (targetPlaylist.sourceType == PlaylistSourceType.LOCAL_FILE || targetPlaylist.sourceType == PlaylistSourceType.STREAM) {
-            statusText = "\"${targetPlaylist.title}\" yerel/tekil kaynak olduğu için doğrudan yenilenemez."
+            if (!silentAuto) {
+                statusText = "\"${targetPlaylist.title}\" yerel/tekil kaynak olduğu için doğrudan yenilenemez."
+            }
             return
         }
         val hdrs = currentHeaders()
         scope.launch {
             refreshingPlaylistId = targetPlaylist.id
-            statusText = "\"${targetPlaylist.title}\" yenileniyor..."
+            if (!silentAuto) {
+                statusText = "\"${targetPlaylist.title}\" güncelleniyor..."
+            }
             try {
                 val refreshedItems = withContext(Dispatchers.IO) {
                     when (targetPlaylist.sourceType) {
                         PlaylistSourceType.XTREAM -> {
-                            val creds = targetPlaylist.xtreamCreds
+                            val creds = targetPlaylist.xtreamCreds ?: resolveActiveXtreamCreds()
                                 ?: throw IllegalStateException("Xtream bilgileri bulunamadı.")
                             fetchAllXtreamMedia(creds, hdrs)
                         }
@@ -653,12 +665,11 @@ private fun JoeApp() {
                     }
                 }
 
-                if (refreshedItems.isEmpty()) {
-                    statusText = "Yenileme sırasında içerik bulunamadı."
-                } else {
+                if (refreshedItems.isNotEmpty()) {
+                    val cappedRefreshed = if (refreshedItems.size > 15_000) refreshedItems.take(15_000) else refreshedItems
                     val favMap = allChannels.associate { "${it.kind.name}-${it.id}-${it.url}" to it.isFavorite }
                     val oldKeys = targetPlaylist.channels.map { "${it.kind.name}-${it.id}-${it.url}" }.toSet()
-                    val enriched = refreshedItems.map { ch ->
+                    val enriched = cappedRefreshed.map { ch ->
                         val fav = favMap["${ch.kind.name}-${ch.id}-${ch.url}"] ?: false
                         ch.copy(isFavorite = fav)
                     }
@@ -667,11 +678,13 @@ private fun JoeApp() {
                     } else {
                         emptyList()
                     }
-                    val mergedChannels = (enriched + remaining).distinctBy { "${it.kind.name}-${it.id}-${it.url}" }
+                    val mergedChannels = (enriched + remaining)
+                        .distinctBy { "${it.kind.name}-${it.id}-${it.url}" }
+                        .take(25_000)
                     val updatedPlaylists = playlists.map { pl ->
                         if (pl.id == targetPlaylist.id) {
                             pl.copy(
-                                channels = if (enriched.size > 4000) emptyList() else enriched,
+                                channels = if (enriched.size > 3_000) emptyList() else enriched,
                                 itemCountSummary = enriched.size
                             )
                         } else {
@@ -683,16 +696,95 @@ private fun JoeApp() {
                     val savedOk = withContext(Dispatchers.IO) {
                         persistNow(channels = mergedChannels, lists = updatedPlaylists)
                     }
-                    statusText = if (savedOk) {
-                        "\"${targetPlaylist.title}\" güncellendi ve kaydedildi (${enriched.size} içerik)."
-                    } else {
-                        "\"${targetPlaylist.title}\" güncellendi ama kayıt hatası: ${lastSaveError ?: ""}"
+                    if (!silentAuto) {
+                        statusText = if (savedOk) {
+                            "\"${targetPlaylist.title}\" güncellendi (${enriched.size} içerik)."
+                        } else {
+                            "\"${targetPlaylist.title}\" güncellendi ama kayıt uyarısı: ${lastSaveError ?: ""}"
+                        }
                     }
+                } else if (!silentAuto) {
+                    statusText = "Güncelleme sırasında yeni içerik bulunamadı."
                 }
             } catch (e: Exception) {
-                statusText = "Liste yenilenemedi: ${e.localizedMessage ?: "Bağlantı hatası"}"
+                if (!silentAuto) {
+                    statusText = "Liste güncellenemedi: ${e.localizedMessage ?: "Bağlantı hatası"}"
+                }
             } finally {
                 refreshingPlaylistId = null
+            }
+        }
+    }
+
+    fun triggerQuickListUpdate() {
+        if (refreshingPlaylistId != null || isLoading) return
+        val refreshableList = playlists.firstOrNull {
+            it.sourceType != PlaylistSourceType.LOCAL_FILE && it.sourceType != PlaylistSourceType.STREAM
+        }
+        if (refreshableList != null) {
+            refreshPlaylist(refreshableList, silentAuto = false)
+            return
+        }
+        val creds = resolveActiveXtreamCreds()
+        if (creds != null) {
+            val hdrs = currentHeaders()
+            scope.launch {
+                isLoading = true
+                statusText = "Kayıtlı Xtream listesi güncelleniyor..."
+                try {
+                    val imported = withContext(Dispatchers.IO) {
+                        fetchAllXtreamMedia(creds, hdrs)
+                    }
+                    if (imported.isNotEmpty()) {
+                        val cappedNew = if (imported.size > 15_000) imported.take(15_000) else imported
+                        val favMap = allChannels.associate { "${it.kind.name}-${it.id}-${it.url}" to it.isFavorite }
+                        val enriched = cappedNew.map { ch ->
+                            val fav = favMap["${ch.kind.name}-${ch.id}-${ch.url}"] ?: false
+                            ch.copy(isFavorite = fav)
+                        }
+                        val title = xtreamNameInput.trim().ifEmpty { "Xtream (${creds.username})" }
+                        val updatedPlaylist = SavedPlaylist(
+                            id = "xt-main-${creds.username}",
+                            title = title,
+                            sourceInfo = creds.serverUrl,
+                            channels = if (enriched.size > 3_000) emptyList() else enriched,
+                            itemCountSummary = enriched.size,
+                            sourceType = PlaylistSourceType.XTREAM,
+                            preferredKind = MediaKind.LIVE,
+                            xtreamCreds = creds
+                        )
+                        val mergedChannels = enriched.distinctBy { "${it.kind.name}-${it.id}-${it.url}" }.take(25_000)
+                        val mergedPlaylists = (listOf(updatedPlaylist) + playlists.filterNot { it.id == updatedPlaylist.id }).take(15)
+                        allChannels = mergedChannels
+                        playlists = mergedPlaylists
+                        withContext(Dispatchers.IO) {
+                            persistNow(channels = mergedChannels, lists = mergedPlaylists)
+                        }
+                        statusText = "\"$title\" güncellendi (${enriched.size} içerik)."
+                    } else {
+                        statusText = "İçerik bulunamadı."
+                    }
+                } catch (e: Exception) {
+                    statusText = "Güncelleme hatası: ${e.localizedMessage ?: "Bağlantı hatası"}"
+                } finally {
+                    isLoading = false
+                }
+            }
+        } else {
+            currentRoute = BottomRoute.PLAYLISTS
+            expandedSection = SourceSection.XTREAM
+            statusText = "Önce bir Xtream hesabı veya liste ekleyin."
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!autoRefreshTriggered) {
+            autoRefreshTriggered = true
+            val refreshable = playlists.firstOrNull {
+                it.sourceType != PlaylistSourceType.LOCAL_FILE && it.sourceType != PlaylistSourceType.STREAM
+            }
+            if (refreshable != null) {
+                refreshPlaylist(refreshable, silentAuto = true)
             }
         }
     }
@@ -936,31 +1028,34 @@ private fun JoeApp() {
     }
 
     fun handleCardClick(item: ChannelEntry) {
-        if (item.kind == MediaKind.SERIES && item.xtreamSeriesId != null && item.xtreamCreds != null) {
-            selectedSeriesForEpisodes = item
-            seriesEpisodes = emptyList()
-            episodeErrorText = null
-            scope.launch {
-                isFetchingEpisodes = true
-                try {
-                    val hdrs = currentHeaders()
-                    seriesEpisodes = withContext(Dispatchers.IO) {
-                        fetchXtreamSeriesEpisodes(item.xtreamCreds, item.xtreamSeriesId, hdrs)
+        if (item.kind == MediaKind.SERIES && item.xtreamSeriesId != null) {
+            val creds = item.xtreamCreds ?: resolveActiveXtreamCreds()
+            if (creds != null) {
+                selectedSeriesForEpisodes = item
+                seriesEpisodes = emptyList()
+                episodeErrorText = null
+                scope.launch {
+                    isFetchingEpisodes = true
+                    try {
+                        val hdrs = currentHeaders()
+                        seriesEpisodes = withContext(Dispatchers.IO) {
+                            fetchXtreamSeriesEpisodes(creds, item.xtreamSeriesId, hdrs)
+                        }
+                        if (seriesEpisodes.isEmpty()) {
+                            episodeErrorText = "Bu dizi için bölüm bulunamadı."
+                        }
+                    } catch (e: Exception) {
+                        episodeErrorText = "Bölümler alınamadı: ${e.localizedMessage ?: "Bağlantı hatası"}"
+                    } finally {
+                        isFetchingEpisodes = false
                     }
-                    if (seriesEpisodes.isEmpty()) {
-                        episodeErrorText = "Bu dizi için bölüm bulunamadı."
-                    }
-                } catch (e: Exception) {
-                    episodeErrorText = "Bölümler alınamadı: ${e.localizedMessage ?: "Bağlantı hatası"}"
-                } finally {
-                    isFetchingEpisodes = false
                 }
+                return
             }
-        } else {
-            activeChannel = item
-            isPlayerFullScreen = true
-            showFullScreenOverlay = true
         }
+        activeChannel = item
+        isPlayerFullScreen = true
+        showFullScreenOverlay = true
     }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -1749,7 +1844,7 @@ private fun JoeApp() {
 
                             Surface(
                                 onClick = {
-                                    if (ch.kind == MediaKind.SERIES && ch.xtreamSeriesId != null && ch.xtreamCreds != null) {
+                                    if (ch.kind == MediaKind.SERIES && ch.xtreamSeriesId != null) {
                                         isPlayerFullScreen = false
                                         handleCardClick(ch)
                                     } else {
@@ -2053,6 +2148,7 @@ private fun JoeApp() {
                 }
 
                 val hasActiveSubFilter = onlyFavoritesFilter || selectedCategoryFilter != "Tümü"
+                val isUpdatingList = refreshingPlaylistId != null || isLoading
 
                 Column(
                     modifier = Modifier
@@ -2164,15 +2260,15 @@ private fun JoeApp() {
                                     color = ChipDarkBg
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.AutoMirrored.Filled.Sort,
                                             contentDescription = null,
                                             tint = Color.White,
-                                            modifier = Modifier.size(18.dp)
+                                            modifier = Modifier.size(16.dp)
                                         )
                                         Text(
                                             text = if (selectedCategoryFilter == "Tümü") {
@@ -2182,7 +2278,7 @@ private fun JoeApp() {
                                             },
                                             color = Color.White,
                                             fontWeight = FontWeight.Medium,
-                                            fontSize = 13.sp,
+                                            fontSize = 12.sp,
                                             maxLines = 1,
                                             softWrap = false,
                                             overflow = TextOverflow.Ellipsis
@@ -2213,21 +2309,21 @@ private fun JoeApp() {
                                     color = ChipDarkBg
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.AutoMirrored.Filled.Sort,
                                             contentDescription = null,
                                             tint = Color.White,
-                                            modifier = Modifier.size(18.dp)
+                                            modifier = Modifier.size(16.dp)
                                         )
                                         Text(
                                             text = "Düzenle",
                                             color = Color.White,
                                             fontWeight = FontWeight.Medium,
-                                            fontSize = 13.sp,
+                                            fontSize = 12.sp,
                                             maxLines = 1,
                                             softWrap = false
                                         )
@@ -2249,7 +2345,41 @@ private fun JoeApp() {
                                     }
                                 }
                             }
+
+                            Surface(
+                                onClick = { triggerQuickListUpdate() },
+                                shape = RoundedCornerShape(24.dp),
+                                color = if (isUpdatingList) AccentRed.copy(alpha = 0.7f) else AccentRed
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Liste Güncelle",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = if (isUpdatingList) "..." else "Güncelle",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 12.sp,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                            }
                         }
+                    }
+
+                    if (isUpdatingList) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = AccentRed
+                        )
                     }
 
                     if (hasActiveSubFilter) {
@@ -2948,7 +3078,7 @@ private fun JoeApp() {
                                                 OutlinedTextField(
                                                     value = macPortalUrlInput,
                                                     onValueChange = { macPortalUrlInput = it },
-                                                    label = { Text("Portal URL (http://portal.com/c/)") },
+                                                    label = { Text("Portal URL (http://portal.com/c/)" ) },
                                                     singleLine = true,
                                                     modifier = Modifier.fillMaxWidth()
                                                 )
@@ -3235,7 +3365,7 @@ private fun JoeApp() {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     if (canRefresh) {
                                         IconButton(
-                                            onClick = { refreshPlaylist(pl) },
+                                            onClick = { refreshPlaylist(pl, silentAuto = false) },
                                             enabled = refreshingPlaylistId == null && !isLoading
                                         ) {
                                             Icon(
@@ -3817,7 +3947,7 @@ private fun loadPersistentState(context: Context): PersistentSnapshot {
     }
 
     if (baseSnapshot == null) {
-        val legacyFiles = listOf("joe_channels_v27.json", "joe_player_state_v26.json", "joe_player_state.json")
+        val legacyFiles = listOf("joe_channels_v28.json", "joe_channels_v27.json", "joe_player_state_v26.json", "joe_player_state.json")
         for (fileName in legacyFiles) {
             val f = File(context.filesDir, fileName)
             if (f.exists() && f.length() > 0L) {
@@ -3970,6 +4100,8 @@ private fun clearAllPersistentState(context: Context) {
             STATE_FILE_NAME,
             STATE_TEMP_FILE_NAME,
             RECENT_FILE_NAME,
+            "joe_channels_v28.json",
+            "joe_channels_v28.tmp",
             "joe_channels_v27.json",
             "joe_channels_v27.tmp",
             "recent_watch_v27.json",
@@ -3980,7 +4112,7 @@ private fun clearAllPersistentState(context: Context) {
         ).forEach { name ->
             File(context.filesDir, name).delete()
         }
-        listOf(PREFS_NAME, "joe_player_prefs_v27", "joe_player_prefs_v26", "joe_player_prefs_v25").forEach { prefName ->
+        listOf(PREFS_NAME, "joe_player_prefs_v28", "joe_player_prefs_v27", "joe_player_prefs_v26", "joe_player_prefs_v25").forEach { prefName ->
             context.getSharedPreferences(prefName, Context.MODE_PRIVATE).edit().clear().commit()
         }
     }
