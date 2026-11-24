@@ -122,7 +122,7 @@ data class SeriesEpisodeItem(
     val streamUrl: String
 )
 
-private data class selectableTrackOption(
+private data class SelectableTrackOption(
     val trackType: @C.TrackType Int,
     val mediaTrackGroup: TrackGroup,
     val trackIndex: Int,
@@ -227,9 +227,12 @@ private fun formatLanguageLabel(format: Format, fallbackIndex: Int, isAudio: Boo
     return if (details.isEmpty()) baseName else "$baseName (${details.joinToString(", ")})"
 }
 
-private fun extractTrackOptions(tracks: Tracks): Pair<List<selectableTrackOption>, List<selectableTrackOption>> {
-    val audioList = mutableListOf<selectableTrackOption>()
-    val textList = mutableListOf<selectableTrackOption>()
+private fun extractTrackOptions(
+    tracks: Tracks,
+    isTextDisabled: Boolean
+): Pair<List<SelectableTrackOption>, List<SelectableTrackOption>> {
+    val audioList = mutableListOf<SelectableTrackOption>()
+    val textList = mutableListOf<SelectableTrackOption>()
 
     tracks.groups.forEach { group ->
         if (!group.isSupported) return@forEach
@@ -239,7 +242,7 @@ private fun extractTrackOptions(tracks: Tracks): Pair<List<selectableTrackOption
                     if (!group.isTrackSupported(i)) continue
                     val fmt = group.getTrackFormat(i)
                     audioList.add(
-                        selectableTrackOption(
+                        SelectableTrackOption(
                             trackType = C.TRACK_TYPE_AUDIO,
                             mediaTrackGroup = group.mediaTrackGroup,
                             trackIndex = i,
@@ -255,13 +258,13 @@ private fun extractTrackOptions(tracks: Tracks): Pair<List<selectableTrackOption
                     if (!group.isTrackSupported(i)) continue
                     val fmt = group.getTrackFormat(i)
                     textList.add(
-                        selectableTrackOption(
+                        SelectableTrackOption(
                             trackType = C.TRACK_TYPE_TEXT,
                             mediaTrackGroup = group.mediaTrackGroup,
                             trackIndex = i,
                             languageCode = normalizeLangTag(fmt.language),
                             title = formatLanguageLabel(fmt, textList.size, isAudio = false),
-                            isSelected = group.isTrackSelected(i)
+                            isSelected = !isTextDisabled && group.isTrackSelected(i)
                         )
                     )
                 }
@@ -272,7 +275,7 @@ private fun extractTrackOptions(tracks: Tracks): Pair<List<selectableTrackOption
 }
 
 private fun buildTrackBadgeText(tracks: Tracks, isTextDisabled: Boolean): String {
-    val (audioOptions, textOptions) = extractTrackOptions(tracks)
+    val (audioOptions, textOptions) = extractTrackOptions(tracks, isTextDisabled)
     val activeAudio = audioOptions.firstOrNull { it.isSelected } ?: audioOptions.firstOrNull()
     val audioTag = when {
         activeAudio != null && activeAudio.languageCode.isNotBlank() ->
@@ -787,7 +790,8 @@ private fun JoeApp() {
 
             override fun onTracksChanged(tracks: Tracks) {
                 currentTracksState = tracks
-                val (audioOpts, textOpts) = extractTrackOptions(tracks)
+                val textDisabled = exoPlayer.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
+                val (audioOpts, textOpts) = extractTrackOptions(tracks, textDisabled)
                 val targetAudioLang = preferredAudioLangOverride
                 if (!targetAudioLang.isNullOrBlank() && targetAudioLang != "tr") {
                     val matchingAudio = audioOpts.firstOrNull {
@@ -1096,15 +1100,15 @@ private fun JoeApp() {
     }
 
     if (showTrackSelectorDialog && activeChannel != null) {
-        val (audioOptions, textOptions) = remember(currentTracksState) {
-            extractTrackOptions(currentTracksState)
+        val isTextDisabled = exoPlayer.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
+        val (audioOptions, textOptions) = remember(currentTracksState, isTextDisabled) {
+            extractTrackOptions(currentTracksState, isTextDisabled)
         }
         val hasTextOverride = remember(exoPlayer.trackSelectionParameters) {
             exoPlayer.trackSelectionParameters.overrides.entries.any { (_, ov) ->
                 textOptions.any { it.mediaTrackGroup == ov.mediaTrackGroup }
             }
         }
-        val isTextDisabled = exoPlayer.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
 
         AlertDialog(
             onDismissRequest = { showTrackSelectorDialog = false },
