@@ -172,14 +172,19 @@ private enum class SortOrder(val label: String) {
 }
 
 private val AccentRed = Color(0xFFE50914)
-private val CardDarkBg = Color(0xFF242020)
-private val ChipDarkBg = Color(0xFF181212)
-private val LightPageBg = Color(0xFFF8F6F6)
-private const val PREFS_NAME = "joe_player_prefs_v30"
-private const val KEY_STATE_JSON = "saved_state_json_v30"
-private const val STATE_FILE_NAME = "joe_channels_v30.json"
-private const val STATE_TEMP_FILE_NAME = "joe_channels_v30.tmp"
-private const val RECENT_FILE_NAME = "recent_watch_v30.json"
+private val DeepCinemaBg = Color(0xFF100C0C)
+private val TopBarDarkBg = Color(0xFF171111)
+private val CardDarkBg = Color(0xFF1E1717)
+private val ElevatedCardBg = Color(0xFF281F1F)
+private val ChipDarkBg = Color(0xFF2B2121)
+private val BorderSubtle = Color(0xFF362A2A)
+private val TextSecondaryLight = Color(0xFFB8AEAE)
+
+private const val PREFS_NAME = "joe_player_prefs_v31"
+private const val KEY_STATE_JSON = "saved_state_json_v31"
+private const val STATE_FILE_NAME = "joe_channels_v31.json"
+private const val STATE_TEMP_FILE_NAME = "joe_channels_v31.tmp"
+private const val RECENT_FILE_NAME = "recent_watch_v31.json"
 private const val DEFAULT_USER_AGENT = "Mozilla/5.0 (Linux; Android 14) JOE-Player/1.0"
 private const val RECENT_CATEGORY_LABEL = "Son İzlenenler"
 
@@ -315,10 +320,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme(
-                colorScheme = lightColorScheme(
+                colorScheme = darkColorScheme(
                     primary = AccentRed,
-                    background = LightPageBg,
-                    surface = Color.White
+                    onPrimary = Color.White,
+                    background = DeepCinemaBg,
+                    onBackground = Color.White,
+                    surface = CardDarkBg,
+                    onSurface = Color.White,
+                    surfaceVariant = ElevatedCardBg,
+                    onSurfaceVariant = TextSecondaryLight,
+                    outline = BorderSubtle
                 )
             ) {
                 JoeApp()
@@ -1041,9 +1052,13 @@ private fun JoeApp() {
     if (showResetAllDialog) {
         AlertDialog(
             onDismissRequest = { showResetAllDialog = false },
-            title = { Text("Tüm Verileri Sıfırla", fontWeight = FontWeight.Bold) },
+            containerColor = ElevatedCardBg,
+            title = { Text("Tüm Verileri Sıfırla", fontWeight = FontWeight.Bold, color = Color.White) },
             text = {
-                Text("Kayıtlı tüm listeler, favoriler, son izlenenler ve hesap bilgileri silinecek. Emin misin?")
+                Text(
+                    "Kayıtlı tüm listeler, favoriler, son izlenenler ve hesap bilgileri silinecek. Emin misin?",
+                    color = TextSecondaryLight
+                )
             },
             confirmButton = {
                 TextButton(
@@ -1074,7 +1089,7 @@ private fun JoeApp() {
             },
             dismissButton = {
                 TextButton(onClick = { showResetAllDialog = false }) {
-                    Text("İptal")
+                    Text("İptal", color = Color.White)
                 }
             }
         )
@@ -1093,7 +1108,8 @@ private fun JoeApp() {
 
         AlertDialog(
             onDismissRequest = { showTrackSelectorDialog = false },
-            title = { Text("Ses Dili ve Altyazı", fontWeight = FontWeight.Bold) },
+            containerColor = ElevatedCardBg,
+            title = { Text("Ses Dili ve Altyazı", fontWeight = FontWeight.Bold, color = Color.White) },
             text = {
                 LazyColumn(
                     modifier = Modifier
@@ -1115,7 +1131,7 @@ private fun JoeApp() {
                             Text(
                                 text = "Bu yayında ayrı ses dili bilgisi bulunamadı (varsayılan ses aktif).",
                                 fontSize = 12.sp,
-                                color = Color.DarkGray
+                                color = TextSecondaryLight
                             )
                         }
                     } else {
@@ -1135,10 +1151,10 @@ private fun JoeApp() {
                                     showTrackSelectorDialog = false
                                 },
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (opt.isSelected) AccentRed.copy(alpha = 0.14f) else Color(0xFFF3F3F3),
+                                color = if (opt.isSelected) AccentRed.copy(alpha = 0.22f) else CardDarkBg,
                                 border = BorderStroke(
                                     width = if (opt.isSelected) 1.5.dp else 1.dp,
-                                    color = if (opt.isSelected) AccentRed else Color.Transparent
+                                    color = if (opt.isSelected) AccentRed else BorderSubtle
                                 ),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
@@ -1151,6 +1167,7 @@ private fun JoeApp() {
                                 ) {
                                     Text(
                                         text = opt.title,
+                                        color = Color.White,
                                         fontSize = 13.sp,
                                         fontWeight = if (opt.isSelected) FontWeight.Bold else FontWeight.Medium,
                                         modifier = Modifier.weight(1f)
@@ -1183,7 +1200,7 @@ private fun JoeApp() {
                             Text(
                                 text = "Bu yayında altyazı izi bulunamadı.",
                                 fontSize = 12.sp,
-                                color = Color.DarkGray
+                                color = TextSecondaryLight
                             )
                         }
                     } else {
@@ -1202,7 +1219,8 @@ private fun JoeApp() {
                                     showTrackSelectorDialog = false
                                 },
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (offSelected) AccentRed.copy(alpha = 0.14f) else Color(0xFFF3F3F3),
+                                color = if (offSelected) AccentRed.copy(alpha = 0.22f) else CardDarkBg,
+                                border = BorderStroke(1.dp, if (offSelected) AccentRed else BorderSubtle),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
@@ -1214,6 +1232,7 @@ private fun JoeApp() {
                                 ) {
                                     Text(
                                         text = "Altyazı Kapalı",
+                                        color = Color.White,
                                         fontSize = 13.sp,
                                         fontWeight = if (offSelected) FontWeight.Bold else FontWeight.Medium
                                     )
@@ -1247,10 +1266,10 @@ private fun JoeApp() {
                                     showTrackSelectorDialog = false
                                 },
                                 shape = RoundedCornerShape(8.dp),
-                                color = if (selectedNow) AccentRed.copy(alpha = 0.14f) else Color(0xFFF3F3F3),
+                                color = if (selectedNow) AccentRed.copy(alpha = 0.22f) else CardDarkBg,
                                 border = BorderStroke(
                                     width = if (selectedNow) 1.5.dp else 1.dp,
-                                    color = if (selectedNow) AccentRed else Color.Transparent
+                                    color = if (selectedNow) AccentRed else BorderSubtle
                                 ),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
@@ -1263,6 +1282,7 @@ private fun JoeApp() {
                                 ) {
                                     Text(
                                         text = opt.title,
+                                        color = Color.White,
                                         fontSize = 13.sp,
                                         fontWeight = if (selectedNow) FontWeight.Bold else FontWeight.Medium,
                                         modifier = Modifier.weight(1f)
@@ -1352,9 +1372,9 @@ private fun JoeApp() {
 
             if (playbackErrorMessage != null) {
                 Surface(
-                    color = Color.Black.copy(alpha = 0.88f),
+                    color = Color.Black.copy(alpha = 0.90f),
                     shape = RoundedCornerShape(14.dp),
-                    border = BorderStroke(1.dp, AccentRed.copy(alpha = 0.6f)),
+                    border = BorderStroke(1.dp, AccentRed.copy(alpha = 0.7f)),
                     modifier = Modifier
                         .align(Alignment.Center)
                         .padding(horizontal = 24.dp)
@@ -1379,7 +1399,7 @@ private fun JoeApp() {
                         )
                         Text(
                             text = playbackErrorMessage!!,
-                            color = Color.LightGray,
+                            color = TextSecondaryLight,
                             fontSize = 13.sp,
                             textAlign = TextAlign.Center
                         )
@@ -1394,7 +1414,8 @@ private fun JoeApp() {
                             }
                             if (nextChannel != null) {
                                 OutlinedButton(
-                                    onClick = { activeChannel = nextChannel }
+                                    onClick = { activeChannel = nextChannel },
+                                    border = BorderStroke(1.dp, BorderSubtle)
                                 ) {
                                     Text("Sonraki Yayın", color = Color.White)
                                 }
@@ -1414,7 +1435,7 @@ private fun JoeApp() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.TopCenter)
-                        .background(Color.Black.copy(alpha = 0.78f))
+                        .background(Color.Black.copy(alpha = 0.82f))
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -1457,7 +1478,7 @@ private fun JoeApp() {
                                 }
                                 Text(
                                     text = currentCh.group,
-                                    color = Color.LightGray,
+                                    color = TextSecondaryLight,
                                     fontSize = 12.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -1583,7 +1604,7 @@ private fun JoeApp() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.BottomCenter)
-                        .background(Color.Black.copy(alpha = 0.88f))
+                        .background(Color.Black.copy(alpha = 0.90f))
                         .padding(vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
@@ -1642,7 +1663,7 @@ private fun JoeApp() {
 
                         Text(
                             text = if (hasSeekableDuration) formatPlayerClock(totalDurationMs) else "CANLI",
-                            color = if (hasSeekableDuration) Color.LightGray else AccentRed,
+                            color = if (hasSeekableDuration) TextSecondaryLight else AccentRed,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
                             softWrap = false
@@ -1706,7 +1727,7 @@ private fun JoeApp() {
                         )
                         Text(
                             text = "Gizlemek için ekrana dokunun",
-                            color = Color.LightGray,
+                            color = TextSecondaryLight,
                             fontSize = 11.sp
                         )
                     }
@@ -1735,7 +1756,7 @@ private fun JoeApp() {
                                 color = if (isCurrent) AccentRed.copy(alpha = 0.25f) else CardDarkBg,
                                 border = BorderStroke(
                                     width = if (isCurrent) 2.5.dp else 1.dp,
-                                    color = if (isCurrent) AccentRed else Color.White.copy(alpha = 0.2f)
+                                    color = if (isCurrent) AccentRed else BorderSubtle
                                 ),
                                 modifier = Modifier
                                     .width(150.dp)
@@ -1752,13 +1773,13 @@ private fun JoeApp() {
                                         modifier = Modifier
                                             .size(36.dp)
                                             .clip(RoundedCornerShape(6.dp))
-                                            .background(Color(0xFF1A1A1A)),
+                                            .background(DeepCinemaBg),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.LiveTv,
                                             contentDescription = null,
-                                            tint = if (isCurrent) AccentRed else Color.LightGray,
+                                            tint = if (isCurrent) AccentRed else TextSecondaryLight,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }
@@ -1796,12 +1817,14 @@ private fun JoeApp() {
         val seriesItem = selectedSeriesForEpisodes!!
         AlertDialog(
             onDismissRequest = { selectedSeriesForEpisodes = null },
+            containerColor = ElevatedCardBg,
             title = {
                 Text(
                     text = seriesItem.name,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
                 )
             },
             text = {
@@ -1818,12 +1841,12 @@ private fun JoeApp() {
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 CircularProgressIndicator(color = AccentRed)
-                                Text("Sezon ve bölümler yükleniyor...")
+                                Text("Sezon ve bölümler yükleniyor...", color = Color.White)
                             }
                         }
 
                         episodeErrorText != null -> {
-                            Text(episodeErrorText!!, color = MaterialTheme.colorScheme.error)
+                            Text(episodeErrorText!!, color = AccentRed)
                         }
 
                         else -> {
@@ -1843,7 +1866,8 @@ private fun JoeApp() {
                                             isPlayerFullScreen = true
                                         },
                                         shape = RoundedCornerShape(8.dp),
-                                        color = Color(0xFFF2F2F2),
+                                        color = CardDarkBg,
+                                        border = BorderStroke(1.dp, BorderSubtle),
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Row(
@@ -1858,6 +1882,7 @@ private fun JoeApp() {
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
                                                 text = "Sezon ${ep.season} • Bölüm ${ep.episodeNum} - ${ep.title}",
+                                                color = Color.White,
                                                 fontSize = 13.sp,
                                                 maxLines = 2,
                                                 overflow = TextOverflow.Ellipsis
@@ -1879,10 +1904,10 @@ private fun JoeApp() {
     }
 
     Scaffold(
-        containerColor = LightPageBg,
+        containerColor = DeepCinemaBg,
         bottomBar = {
             NavigationBar(
-                containerColor = Color(0xFF181212),
+                containerColor = TopBarDarkBg,
                 contentColor = Color.White
             ) {
                 NavigationBarItem(
@@ -1893,9 +1918,9 @@ private fun JoeApp() {
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = AccentRed,
                         selectedTextColor = AccentRed,
-                        indicatorColor = CardDarkBg,
-                        unselectedIconColor = Color.LightGray,
-                        unselectedTextColor = Color.LightGray
+                        indicatorColor = ElevatedCardBg,
+                        unselectedIconColor = TextSecondaryLight,
+                        unselectedTextColor = TextSecondaryLight
                     )
                 )
                 NavigationBarItem(
@@ -1906,9 +1931,9 @@ private fun JoeApp() {
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = AccentRed,
                         selectedTextColor = AccentRed,
-                        indicatorColor = CardDarkBg,
-                        unselectedIconColor = Color.LightGray,
-                        unselectedTextColor = Color.LightGray
+                        indicatorColor = ElevatedCardBg,
+                        unselectedIconColor = TextSecondaryLight,
+                        unselectedTextColor = TextSecondaryLight
                     )
                 )
                 NavigationBarItem(
@@ -1922,9 +1947,9 @@ private fun JoeApp() {
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = AccentRed,
                         selectedTextColor = AccentRed,
-                        indicatorColor = CardDarkBg,
-                        unselectedIconColor = Color.LightGray,
-                        unselectedTextColor = Color.LightGray
+                        indicatorColor = ElevatedCardBg,
+                        unselectedIconColor = TextSecondaryLight,
+                        unselectedTextColor = TextSecondaryLight
                     )
                 )
             }
@@ -2038,11 +2063,25 @@ private fun JoeApp() {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color.White)
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                            .background(TopBarDarkBg)
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = AccentRed
+                        ) {
+                            Text(
+                                text = "JOE",
+                                color = Color.White,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 14.sp,
+                                letterSpacing = 1.sp,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            )
+                        }
+
                         LazyRow(
                             modifier = Modifier.weight(1f),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -2065,7 +2104,15 @@ private fun JoeApp() {
                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                                         )
                                     },
+                                    border = FilterChipDefaults.filterChipBorder(
+                                        enabled = true,
+                                        selected = isSelected,
+                                        borderColor = BorderSubtle,
+                                        selectedBorderColor = AccentRed
+                                    ),
                                     colors = FilterChipDefaults.filterChipColors(
+                                        containerColor = ChipDarkBg,
+                                        labelColor = Color.White,
                                         selectedContainerColor = AccentRed,
                                         selectedLabelColor = Color.White
                                     )
@@ -2092,7 +2139,16 @@ private fun JoeApp() {
                                     fontWeight = if (onlyFavoritesFilter) FontWeight.Bold else FontWeight.Medium
                                 )
                             },
+                            border = FilterChipDefaults.filterChipBorder(
+                                enabled = true,
+                                selected = onlyFavoritesFilter,
+                                borderColor = BorderSubtle,
+                                selectedBorderColor = AccentRed
+                            ),
                             colors = FilterChipDefaults.filterChipColors(
+                                containerColor = ChipDarkBg,
+                                labelColor = Color.White,
+                                iconColor = AccentRed,
                                 selectedContainerColor = AccentRed,
                                 selectedLabelColor = Color.White,
                                 selectedLeadingIconColor = Color.White
@@ -2103,7 +2159,7 @@ private fun JoeApp() {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color.White)
+                            .background(TopBarDarkBg)
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -2113,13 +2169,15 @@ private fun JoeApp() {
                                 isSearchActive = !isSearchActive
                                 if (!isSearchActive) searchQuery = ""
                             },
-                            modifier = Modifier.size(40.dp)
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(ChipDarkBg, CircleShape)
                         ) {
                             Icon(
                                 imageVector = if (isSearchActive) Icons.Default.Close else Icons.Default.Search,
                                 contentDescription = "Ara",
-                                tint = Color.Black,
-                                modifier = Modifier.size(26.dp)
+                                tint = Color.White,
+                                modifier = Modifier.size(22.dp)
                             )
                         }
 
@@ -2127,8 +2185,16 @@ private fun JoeApp() {
                             OutlinedTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
-                                placeholder = { Text("${selectedMediaKind.label} içinde ara...") },
+                                placeholder = { Text("${selectedMediaKind.label} içinde ara...", color = TextSecondaryLight) },
                                 singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White,
+                                    focusedContainerColor = CardDarkBg,
+                                    unfocusedContainerColor = CardDarkBg,
+                                    focusedBorderColor = AccentRed,
+                                    unfocusedBorderColor = BorderSubtle
+                                ),
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(24.dp)
                             )
@@ -2137,7 +2203,8 @@ private fun JoeApp() {
                                 Surface(
                                     onClick = { showCategoryMenu = true },
                                     shape = RoundedCornerShape(24.dp),
-                                    color = ChipDarkBg
+                                    color = ChipDarkBg,
+                                    border = BorderStroke(1.dp, BorderSubtle)
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -2147,7 +2214,7 @@ private fun JoeApp() {
                                         Icon(
                                             imageVector = Icons.AutoMirrored.Filled.Sort,
                                             contentDescription = null,
-                                            tint = Color.White,
+                                            tint = AccentRed,
                                             modifier = Modifier.size(16.dp)
                                         )
                                         Text(
@@ -2168,11 +2235,12 @@ private fun JoeApp() {
 
                                 DropdownMenu(
                                     expanded = showCategoryMenu,
-                                    onDismissRequest = { showCategoryMenu = false }
+                                    onDismissRequest = { showCategoryMenu = false },
+                                    containerColor = ElevatedCardBg
                                 ) {
                                     categories.forEach { cat ->
                                         DropdownMenuItem(
-                                            text = { Text(cat) },
+                                            text = { Text(cat, color = Color.White) },
                                             onClick = {
                                                 selectedCategoryFilter = cat
                                                 showCategoryMenu = false
@@ -2186,7 +2254,8 @@ private fun JoeApp() {
                                 Surface(
                                     onClick = { showSortMenu = true },
                                     shape = RoundedCornerShape(24.dp),
-                                    color = ChipDarkBg
+                                    color = ChipDarkBg,
+                                    border = BorderStroke(1.dp, BorderSubtle)
                                 ) {
                                     Row(
                                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -2212,11 +2281,12 @@ private fun JoeApp() {
 
                                 DropdownMenu(
                                     expanded = showSortMenu,
-                                    onDismissRequest = { showSortMenu = false }
+                                    onDismissRequest = { showSortMenu = false },
+                                    containerColor = ElevatedCardBg
                                 ) {
                                     SortOrder.entries.forEach { order ->
                                         DropdownMenuItem(
-                                            text = { Text(order.label) },
+                                            text = { Text(order.label, color = Color.White) },
                                             onClick = {
                                                 sortOrder = order
                                                 showSortMenu = false
@@ -2274,7 +2344,7 @@ private fun JoeApp() {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(AccentRed.copy(alpha = 0.12f))
+                                .background(AccentRed.copy(alpha = 0.16f))
                                 .padding(horizontal = 16.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -2283,7 +2353,7 @@ private fun JoeApp() {
                                 text = summaryLabel,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF1A1A1A),
+                                color = Color.White,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f)
@@ -2306,7 +2376,7 @@ private fun JoeApp() {
                         }
                     }
 
-                    HorizontalDivider(color = Color(0xFFE6E6E6))
+                    HorizontalDivider(color = BorderSubtle)
 
                     if (activeChannel != null) {
                         Box(
@@ -2338,7 +2408,7 @@ private fun JoeApp() {
                                     onClick = { isPlayerFullScreen = true },
                                     modifier = Modifier
                                         .size(34.dp)
-                                        .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.65f), CircleShape)
                                 ) {
                                     Icon(Icons.Default.Fullscreen, contentDescription = "Tam Ekran", tint = Color.White)
                                 }
@@ -2346,7 +2416,7 @@ private fun JoeApp() {
                                     onClick = { activeChannel = null },
                                     modifier = Modifier
                                         .size(34.dp)
-                                        .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                                        .background(Color.Black.copy(alpha = 0.65f), CircleShape)
                                 ) {
                                     Icon(Icons.Default.Close, contentDescription = "Kapat", tint = Color.White)
                                 }
@@ -2365,7 +2435,7 @@ private fun JoeApp() {
                                 } else {
                                     "${selectedMediaKind.label} bölümünde içerik bulunamadı. Listelerim sekmesinden kaynak ekleyebilirsiniz."
                                 },
-                                color = Color.DarkGray,
+                                color = TextSecondaryLight,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier.padding(24.dp)
                             )
@@ -2391,7 +2461,7 @@ private fun JoeApp() {
                                     onToggleFavorite = { toggleFavorite(channel.id) },
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .height(118.dp)
+                                        .height(124.dp)
                                 )
                             }
                         }
@@ -2401,8 +2471,8 @@ private fun JoeApp() {
                         }
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(20.dp)
+                            contentPadding = PaddingValues(vertical = 14.dp),
+                            verticalArrangement = Arrangement.spacedBy(22.dp)
                         ) {
                             itemsIndexed(
                                 items = categoryEntries,
@@ -2428,20 +2498,26 @@ private fun JoeApp() {
                                     ) {
                                         Text(
                                             text = categoryName,
-                                            fontSize = 20.sp,
+                                            fontSize = 19.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = if (categoryName == RECENT_CATEGORY_LABEL) AccentRed else Color(0xFF1A1A1A),
+                                            color = if (categoryName == RECENT_CATEGORY_LABEL) AccentRed else Color.White,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.weight(1f)
                                         )
-                                        Text(
-                                            text = "${channelList.size} >",
-                                            fontSize = 14.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = AccentRed,
-                                            softWrap = false
-                                        )
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = ChipDarkBg
+                                        ) {
+                                            Text(
+                                                text = "${channelList.size} >",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = AccentRed,
+                                                softWrap = false,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                            )
+                                        }
                                     }
 
                                     LazyRow(
@@ -2460,8 +2536,8 @@ private fun JoeApp() {
                                                 onClick = { handleCardClick(channel) },
                                                 onToggleFavorite = { toggleFavorite(channel.id) },
                                                 modifier = Modifier
-                                                    .width(155.dp)
-                                                    .height(118.dp)
+                                                    .width(158.dp)
+                                                    .height(124.dp)
                                             )
                                         }
                                     }
@@ -2481,7 +2557,7 @@ private fun JoeApp() {
                         .padding(innerPadding)
                         .padding(horizontal = 16.dp),
                     contentPadding = PaddingValues(top = 14.dp, bottom = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     item {
                         Row(
@@ -2493,7 +2569,7 @@ private fun JoeApp() {
                                 text = "Listelerim",
                                 style = MaterialTheme.typography.headlineSmall,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF1A1A1A)
+                                color = Color.White
                             )
 
                             Button(
@@ -2518,23 +2594,41 @@ private fun JoeApp() {
                     }
 
                     item {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(
-                                text = "Varsayılan Hedef Bölüm",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = Color.DarkGray
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                MediaKind.entries.forEach { kind ->
-                                    FilterChip(
-                                        selected = defaultImportKind == kind,
-                                        onClick = { defaultImportKind = kind },
-                                        label = { Text(kind.label, maxLines = 1, fontSize = 12.sp) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = AccentRed,
-                                            selectedLabelColor = Color.White
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = CardDarkBg),
+                            border = BorderStroke(1.dp, BorderSubtle),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Varsayılan Hedef Bölüm",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = TextSecondaryLight
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    MediaKind.entries.forEach { kind ->
+                                        val isSelected = defaultImportKind == kind
+                                        FilterChip(
+                                            selected = isSelected,
+                                            onClick = { defaultImportKind = kind },
+                                            label = { Text(kind.label, maxLines = 1, fontSize = 12.sp) },
+                                            border = FilterChipDefaults.filterChipBorder(
+                                                enabled = true,
+                                                selected = isSelected,
+                                                borderColor = BorderSubtle,
+                                                selectedBorderColor = AccentRed
+                                            ),
+                                            colors = FilterChipDefaults.filterChipColors(
+                                                containerColor = ChipDarkBg,
+                                                labelColor = Color.White,
+                                                selectedContainerColor = AccentRed,
+                                                selectedLabelColor = Color.White
+                                            )
                                         )
-                                    )
+                                    }
                                 }
                             }
                         }
@@ -2552,15 +2646,16 @@ private fun JoeApp() {
                     if (statusText != null) {
                         item {
                             Surface(
-                                color = AccentRed.copy(alpha = 0.12f),
-                                shape = RoundedCornerShape(8.dp),
+                                color = AccentRed.copy(alpha = 0.16f),
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, AccentRed.copy(alpha = 0.5f)),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
                                     text = statusText!!,
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.Medium,
-                                    color = AccentRed,
+                                    color = Color.White,
                                     modifier = Modifier.padding(12.dp)
                                 )
                             }
@@ -2571,9 +2666,9 @@ private fun JoeApp() {
                         val isExpanded = expandedSection == section
                         Card(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(10.dp),
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(containerColor = CardDarkBg),
+                            border = BorderStroke(1.dp, if (isExpanded) AccentRed.copy(alpha = 0.6f) else BorderSubtle)
                         ) {
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 Row(
@@ -2591,18 +2686,18 @@ private fun JoeApp() {
                                         text = section.title,
                                         fontSize = 15.sp,
                                         fontWeight = FontWeight.SemiBold,
-                                        color = Color(0xFF1A1A1A),
+                                        color = Color.White,
                                         modifier = Modifier.weight(1f)
                                     )
                                     Icon(
                                         imageVector = if (isExpanded) Icons.Default.ArrowDropUp else Icons.Default.ArrowDropDown,
                                         contentDescription = null,
-                                        tint = Color(0xFF333333)
+                                        tint = AccentRed
                                     )
                                 }
 
                                 if (isExpanded) {
-                                    HorizontalDivider(color = Color(0xFFEEEEEE))
+                                    HorizontalDivider(color = BorderSubtle)
                                     Column(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -2614,28 +2709,28 @@ private fun JoeApp() {
                                                 OutlinedTextField(
                                                     value = xtreamNameInput,
                                                     onValueChange = { xtreamNameInput = it },
-                                                    label = { Text("Hesap / Liste Adı (İsteğe bağlı)") },
+                                                    label = { Text("Hesap / Liste Adı (İsteğe bağlı)", color = TextSecondaryLight) },
                                                     singleLine = true,
                                                     modifier = Modifier.fillMaxWidth()
                                                 )
                                                 OutlinedTextField(
                                                     value = xtreamServerInput,
                                                     onValueChange = { xtreamServerInput = it },
-                                                    label = { Text("Sunucu Adresi (http://ornek.com:8080)") },
+                                                    label = { Text("Sunucu Adresi (http://ornek.com:8080)", color = TextSecondaryLight) },
                                                     singleLine = true,
                                                     modifier = Modifier.fillMaxWidth()
                                                 )
                                                 OutlinedTextField(
                                                     value = xtreamUserInput,
                                                     onValueChange = { xtreamUserInput = it },
-                                                    label = { Text("Kullanıcı Adı") },
+                                                    label = { Text("Kullanıcı Adı", color = TextSecondaryLight) },
                                                     singleLine = true,
                                                     modifier = Modifier.fillMaxWidth()
                                                 )
                                                 OutlinedTextField(
                                                     value = xtreamPassInput,
                                                     onValueChange = { xtreamPassInput = it },
-                                                    label = { Text("Şifre") },
+                                                    label = { Text("Şifre", color = TextSecondaryLight) },
                                                     singleLine = true,
                                                     visualTransformation = if (showXtreamPassword) {
                                                         VisualTransformation.None
@@ -2650,7 +2745,8 @@ private fun JoeApp() {
                                                                 } else {
                                                                     Icons.Default.Visibility
                                                                 },
-                                                                contentDescription = "Şifre Göster"
+                                                                contentDescription = "Şifre Göster",
+                                                                tint = TextSecondaryLight
                                                             )
                                                         }
                                                     },
@@ -2709,14 +2805,14 @@ private fun JoeApp() {
                                                 OutlinedTextField(
                                                     value = m3uNameInput,
                                                     onValueChange = { m3uNameInput = it },
-                                                    label = { Text("Liste Adı (İsteğe bağlı)") },
+                                                    label = { Text("Liste Adı (İsteğe bağlı)", color = TextSecondaryLight) },
                                                     singleLine = true,
                                                     modifier = Modifier.fillMaxWidth()
                                                 )
                                                 OutlinedTextField(
                                                     value = m3uUrlInput,
                                                     onValueChange = { m3uUrlInput = it },
-                                                    label = { Text("M3U / M3U8 URL") },
+                                                    label = { Text("M3U / M3U8 URL", color = TextSecondaryLight) },
                                                     singleLine = true,
                                                     modifier = Modifier.fillMaxWidth()
                                                 )
@@ -2764,9 +2860,10 @@ private fun JoeApp() {
                                                             activeFileTarget = FileImportTarget.M3U8
                                                             filePickerLauncher.launch(arrayOf("*/*"))
                                                         },
+                                                        border = BorderStroke(1.dp, BorderSubtle),
                                                         enabled = !isLoading
                                                     ) {
-                                                        Text("Dosya Seç")
+                                                        Text("Dosya Seç", color = Color.White)
                                                     }
                                                 }
                                             }
@@ -2775,14 +2872,14 @@ private fun JoeApp() {
                                                 OutlinedTextField(
                                                     value = githubNameInput,
                                                     onValueChange = { githubNameInput = it },
-                                                    label = { Text("GitHub Paket Adı (İsteğe bağlı)") },
+                                                    label = { Text("GitHub Paket Adı (İsteğe bağlı)", color = TextSecondaryLight) },
                                                     singleLine = true,
                                                     modifier = Modifier.fillMaxWidth()
                                                 )
                                                 OutlinedTextField(
                                                     value = githubUrlInput,
                                                     onValueChange = { githubUrlInput = it },
-                                                    label = { Text("GitHub Repo veya Raw Dosya URL") },
+                                                    label = { Text("GitHub Repo veya Raw Dosya URL", color = TextSecondaryLight) },
                                                     singleLine = true,
                                                     modifier = Modifier.fillMaxWidth()
                                                 )
@@ -2832,57 +2929,57 @@ private fun JoeApp() {
                     }
 
                     item {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = CardDarkBg),
+                            border = BorderStroke(1.dp, BorderSubtle),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                text = "İsteğe Bağlı: Özel Kimlik Bilgileri",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF4A4A4A)
-                            )
-
-                            OutlinedTextField(
-                                value = userAgentInput,
-                                onValueChange = {
-                                    userAgentInput = it
-                                    persistNow()
-                                },
-                                placeholder = { Text("User-Agent (gerekliyse)") },
-                                singleLine = true,
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(Color(0xFFE5E5E5), RoundedCornerShape(6.dp))
-                            )
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "İsteğe Bağlı: Özel Kimlik Bilgileri",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White
+                                )
 
-                            OutlinedTextField(
-                                value = refererInput,
-                                onValueChange = {
-                                    refererInput = it
-                                    persistNow()
-                                },
-                                placeholder = { Text("Referer (gerekliyse)") },
-                                singleLine = true,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(Color(0xFFE5E5E5), RoundedCornerShape(6.dp))
-                            )
+                                OutlinedTextField(
+                                    value = userAgentInput,
+                                    onValueChange = {
+                                        userAgentInput = it
+                                        persistNow()
+                                    },
+                                    placeholder = { Text("User-Agent (gerekliyse)", color = TextSecondaryLight) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
 
-                            OutlinedTextField(
-                                value = originInput,
-                                onValueChange = {
-                                    originInput = it
-                                    persistNow()
-                                },
-                                placeholder = { Text("Origin (gerekliyse)") },
-                                singleLine = true,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(Color(0xFFE5E5E5), RoundedCornerShape(6.dp))
-                            )
+                                OutlinedTextField(
+                                    value = refererInput,
+                                    onValueChange = {
+                                        refererInput = it
+                                        persistNow()
+                                    },
+                                    placeholder = { Text("Referer (gerekliyse)", color = TextSecondaryLight) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+
+                                OutlinedTextField(
+                                    value = originInput,
+                                    onValueChange = {
+                                        originInput = it
+                                        persistNow()
+                                    },
+                                    placeholder = { Text("Origin (gerekliyse)", color = TextSecondaryLight) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                         }
                     }
 
@@ -2892,8 +2989,8 @@ private fun JoeApp() {
                                 text = "Kayıtlı Listeler (${playlists.size})",
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFF1A1A1A),
-                                modifier = Modifier.padding(top = 6.dp)
+                                color = Color.White,
+                                modifier = Modifier.padding(top = 4.dp)
                             )
                         }
                     }
@@ -2909,17 +3006,18 @@ private fun JoeApp() {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { currentRoute = BottomRoute.HOME },
-                            colors = CardDefaults.cardColors(containerColor = Color.White)
+                            colors = CardDefaults.cardColors(containerColor = CardDarkBg),
+                            border = BorderStroke(1.dp, BorderSubtle)
                         ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    .padding(horizontal = 14.dp, vertical = 12.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(pl.title, fontWeight = FontWeight.SemiBold)
+                                    Text(pl.title, fontWeight = FontWeight.SemiBold, color = Color.White)
                                     Text(
                                         text = "TV: $liveCnt • Film: $movieCnt • Dizi: $seriesCnt",
                                         style = MaterialTheme.typography.labelMedium,
@@ -2930,7 +3028,7 @@ private fun JoeApp() {
                                     Text(
                                         text = pl.sourceInfo,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray,
+                                        color = TextSecondaryLight,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
@@ -2944,7 +3042,7 @@ private fun JoeApp() {
                                             Icon(
                                                 imageVector = Icons.Default.Refresh,
                                                 contentDescription = "Listeyi Yenile",
-                                                tint = Color(0xFF333333)
+                                                tint = Color.White
                                             )
                                         }
                                     }
@@ -2983,13 +3081,14 @@ private fun JoeApp() {
                             text = "Ayarlar",
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
-                            color = Color(0xFF1A1A1A)
+                            color = Color.White
                         )
                     }
 
                     item {
                         Card(
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            colors = CardDefaults.cardColors(containerColor = CardDarkBg),
+                            border = BorderStroke(1.dp, BorderSubtle),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(
@@ -3002,7 +3101,7 @@ private fun JoeApp() {
                                 Text(
                                     text = "İçerik: ${allChannels.size} • Liste: ${playlists.size} • Disk: ${diskKb} KB • Saat: ${formatClockTime(lastSaveTimestamp)}",
                                     fontSize = 12.sp,
-                                    color = Color(0xFF222222)
+                                    color = Color.White
                                 )
                                 if (lastSaveError != null) {
                                     Text(
@@ -3019,13 +3118,14 @@ private fun JoeApp() {
                     if (settingsFeedback != null) {
                         item {
                             Surface(
-                                color = AccentRed.copy(alpha = 0.12f),
-                                shape = RoundedCornerShape(8.dp),
+                                color = AccentRed.copy(alpha = 0.16f),
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, AccentRed.copy(alpha = 0.5f)),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
                                     text = settingsFeedback!!,
-                                    color = AccentRed,
+                                    color = Color.White,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Medium,
                                     modifier = Modifier.padding(12.dp)
@@ -3036,7 +3136,8 @@ private fun JoeApp() {
 
                     item {
                         Card(
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            colors = CardDefaults.cardColors(containerColor = CardDarkBg),
+                            border = BorderStroke(1.dp, BorderSubtle),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -3047,11 +3148,11 @@ private fun JoeApp() {
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text("Otomatik Oynat", fontWeight = FontWeight.SemiBold)
+                                    Text("Otomatik Oynat", fontWeight = FontWeight.SemiBold, color = Color.White)
                                     Text(
                                         text = "İçerik seçildiğinde oynatmayı hemen başlat",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray
+                                        color = TextSecondaryLight
                                     )
                                 }
                                 Switch(
@@ -3067,7 +3168,8 @@ private fun JoeApp() {
 
                     item {
                         Card(
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            colors = CardDefaults.cardColors(containerColor = CardDarkBg),
+                            border = BorderStroke(1.dp, BorderSubtle),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -3078,11 +3180,11 @@ private fun JoeApp() {
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text("Varsayılan Ekran Sığdırma", fontWeight = FontWeight.SemiBold)
+                                    Text("Varsayılan Ekran Sığdırma", fontWeight = FontWeight.SemiBold, color = Color.White)
                                     Text(
                                         text = if (fillScreenAspect) "Tam Ekran Sığdır (Zoom)" else "Orijinal En/Boy Oranı",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray
+                                        color = TextSecondaryLight
                                     )
                                 }
                                 Switch(
@@ -3098,7 +3200,8 @@ private fun JoeApp() {
 
                     item {
                         Card(
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            colors = CardDefaults.cardColors(containerColor = CardDarkBg),
+                            border = BorderStroke(1.dp, BorderSubtle),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(
@@ -3107,11 +3210,12 @@ private fun JoeApp() {
                                     .padding(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text("Varsayılan Açılış Bölümü", fontWeight = FontWeight.SemiBold)
+                                Text("Varsayılan Açılış Bölümü", fontWeight = FontWeight.SemiBold, color = Color.White)
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     MediaKind.entries.forEach { kind ->
+                                        val isSelected = defaultStartKind == kind
                                         FilterChip(
-                                            selected = defaultStartKind == kind,
+                                            selected = isSelected,
                                             onClick = {
                                                 defaultStartKind = kind
                                                 selectedMediaKind = kind
@@ -3119,7 +3223,15 @@ private fun JoeApp() {
                                                 persistNow(startKind = kind)
                                             },
                                             label = { Text(kind.label, maxLines = 1, fontSize = 12.sp) },
+                                            border = FilterChipDefaults.filterChipBorder(
+                                                enabled = true,
+                                                selected = isSelected,
+                                                borderColor = BorderSubtle,
+                                                selectedBorderColor = AccentRed
+                                            ),
                                             colors = FilterChipDefaults.filterChipColors(
+                                                containerColor = ChipDarkBg,
+                                                labelColor = Color.White,
                                                 selectedContainerColor = AccentRed,
                                                 selectedLabelColor = Color.White
                                             )
@@ -3132,7 +3244,8 @@ private fun JoeApp() {
 
                     item {
                         Card(
-                            colors = CardDefaults.cardColors(containerColor = Color.White),
+                            colors = CardDefaults.cardColors(containerColor = CardDarkBg),
+                            border = BorderStroke(1.dp, BorderSubtle),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(
@@ -3141,7 +3254,7 @@ private fun JoeApp() {
                                     .padding(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Text("Veri ve Geçmiş Yönetimi", fontWeight = FontWeight.SemiBold)
+                                Text("Veri ve Geçmiş Yönetimi", fontWeight = FontWeight.SemiBold, color = Color.White)
 
                                 OutlinedButton(
                                     onClick = {
@@ -3150,11 +3263,12 @@ private fun JoeApp() {
                                         settingsFeedback = "Son izlenenler geçmişi temizlendi."
                                     },
                                     enabled = recentWatches.isNotEmpty(),
+                                    border = BorderStroke(1.dp, BorderSubtle),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Icon(Icons.Default.History, contentDescription = null)
+                                    Icon(Icons.Default.History, contentDescription = null, tint = Color.White)
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("Son İzlenenleri Temizle (${recentWatches.size})")
+                                    Text("Son İzlenenleri Temizle (${recentWatches.size})", color = Color.White)
                                 }
 
                                 Button(
@@ -3190,9 +3304,17 @@ private fun MediaShelfCard(
         MediaKind.SERIES -> Icons.Default.Tv
     }
 
+    val kindShortTag = when (channel.kind) {
+        MediaKind.LIVE -> "TV"
+        MediaKind.MOVIES -> "FİLM"
+        MediaKind.SERIES -> "DİZİ"
+    }
+
     val posterUrl = channel.posterUrl?.trim()?.takeIf {
         it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true)
     }
+
+    val topLeftText = resumeBadge ?: kindShortTag
 
     Surface(
         onClick = onClick,
@@ -3200,27 +3322,25 @@ private fun MediaShelfCard(
         color = CardDarkBg,
         border = BorderStroke(
             width = if (isSelected) 2.dp else 1.dp,
-            color = if (isSelected) AccentRed else AccentRed.copy(alpha = 0.55f)
+            color = if (isSelected) AccentRed else BorderSubtle
         ),
         modifier = modifier
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            if (resumeBadge != null) {
-                Surface(
-                    color = AccentRed,
-                    shape = RoundedCornerShape(6.dp),
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(6.dp)
-                ) {
-                    Text(
-                        text = resumeBadge,
-                        color = Color.White,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                    )
-                }
+            Surface(
+                color = if (resumeBadge != null || isSelected) AccentRed else ElevatedCardBg,
+                shape = RoundedCornerShape(6.dp),
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+            ) {
+                Text(
+                    text = topLeftText,
+                    color = Color.White,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
             }
 
             IconButton(
@@ -3232,7 +3352,7 @@ private fun MediaShelfCard(
                 Icon(
                     imageVector = if (channel.isFavorite) Icons.Default.Favorite else Icons.Outlined.FavoriteBorder,
                     contentDescription = "Favori",
-                    tint = if (channel.isFavorite) AccentRed else Color.LightGray,
+                    tint = if (channel.isFavorite) AccentRed else TextSecondaryLight,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -3244,19 +3364,19 @@ private fun MediaShelfCard(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
                 Box(
                     modifier = Modifier
                         .size(46.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF1A1A1A)),
+                        .background(ElevatedCardBg),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = shelfIcon,
                         contentDescription = null,
-                        tint = if (isSelected) AccentRed else Color.LightGray,
+                        tint = if (isSelected) AccentRed else TextSecondaryLight,
                         modifier = Modifier.size(22.dp)
                     )
 
@@ -3518,7 +3638,7 @@ private fun loadPersistentState(context: Context): PersistentSnapshot {
     }
 
     if (baseSnapshot == null) {
-        val legacyFiles = listOf("joe_channels_v29.json", "joe_channels_v28.json", "joe_channels_v27.json", "joe_player_state_v26.json", "joe_player_state.json")
+        val legacyFiles = listOf("joe_channels_v30.json", "joe_channels_v29.json", "joe_channels_v28.json", "joe_channels_v27.json", "joe_player_state_v26.json", "joe_player_state.json")
         for (fileName in legacyFiles) {
             val f = File(context.filesDir, fileName)
             if (f.exists() && f.length() > 0L) {
@@ -3669,6 +3789,8 @@ private fun clearAllPersistentState(context: Context) {
             STATE_FILE_NAME,
             STATE_TEMP_FILE_NAME,
             RECENT_FILE_NAME,
+            "joe_channels_v30.json",
+            "joe_channels_v30.tmp",
             "joe_channels_v29.json",
             "joe_channels_v29.tmp",
             "joe_channels_v28.json",
@@ -3683,7 +3805,7 @@ private fun clearAllPersistentState(context: Context) {
         ).forEach { name ->
             File(context.filesDir, name).delete()
         }
-        listOf(PREFS_NAME, "joe_player_prefs_v29", "joe_player_prefs_v28", "joe_player_prefs_v27", "joe_player_prefs_v26", "joe_player_prefs_v25").forEach { prefName ->
+        listOf(PREFS_NAME, "joe_player_prefs_v30", "joe_player_prefs_v29", "joe_player_prefs_v28", "joe_player_prefs_v27", "joe_player_prefs_v26", "joe_player_prefs_v25").forEach { prefName ->
             context.getSharedPreferences(prefName, Context.MODE_PRIVATE).edit().clear().commit()
         }
     }
