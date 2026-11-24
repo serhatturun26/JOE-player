@@ -3,9 +3,12 @@ package com.joe.player
 import android.app.Activity
 import android.content.Context
 import android.os.Bundle
+import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -33,6 +36,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -326,7 +339,7 @@ object JoePlaylistFetcher {
                             title = name,
                             subtitle = categoryName,
                             group = categoryName,
-                            streamUrl = "$baseUrl/live/${playlist.username}/${playlist.password}/$streamId.ts",
+                            streamUrl = "$baseUrl/live/${playlist.username}/${playlist.password}/$streamId.m3u8",
                             category = MediaCategory.LIVE,
                             isLive = true
                         )
@@ -361,7 +374,7 @@ object JoePlaylistFetcher {
             }
         }
 
-        // 3. Diziler
+        // 3. Diziler (Bölüm akışlarını çözümle)
         runCatching {
             val seriesJson = downloadText("$baseUrl/player_api.php?username=$user&password=$pass&action=get_series")
             val array = JSONArray(seriesJson)
@@ -386,12 +399,38 @@ object JoePlaylistFetcher {
             }
         }
 
-        // Xtream API JSON dönmezse M3U çıktısını yedek olarak dene
         if (items.isEmpty()) {
-            return fetchM3u("$baseUrl/get.php?username=$user&password=$pass&type=m3u_plus&output=ts")
+            return fetchM3u("$baseUrl/get.php?username=$user&password=$pass&type=m3u_plus&output=m3u8")
         }
 
         return items
+    }
+
+    suspend fun resolvePlayableUrl(item: JoeChannelItem, playlist: JoePlaylist?): String = withContext(Dispatchers.IO) {
+        if (item.category != MediaCategory.SERIES || !item.streamUrl.contains("get_series_info")) {
+            return@withContext item.streamUrl
+        }
+        try {
+            val infoText = downloadText(item.streamUrl)
+            val root = JSONObject(infoText)
+            val episodesObj = root.optJSONObject("episodes") ?: return@withContext item.streamUrl
+            val seasonKeys = episodesObj.keys()
+            if (seasonKeys.hasNext()) {
+                val firstSeason = seasonKeys.next()
+                val epArray = episodesObj.optJSONArray(firstSeason)
+                if (epArray != null && epArray.length() > 0 && playlist != null) {
+                    val firstEp = epArray.getJSONObject(0)
+                    val epId = firstEp.optString("id", "")
+                    val ext = firstEp.optString("container_extension", "mp4").ifBlank { "mp4" }
+                    val baseUrl = normalizeBaseUrl(playlist.serverUrl)
+                    if (epId.isNotEmpty()) {
+                        return@withContext "$baseUrl/series/${playlist.username}/${playlist.password}/$epId.$ext"
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        item.streamUrl
     }
 }
 
@@ -453,7 +492,7 @@ fun JoeMainScreen() {
     var selectedCategory by remember { mutableStateOf("Tümü") }
     var selectedChannel by remember { mutableStateOf<JoeChannelItem?>(null) }
     var activePlayerChannel by remember { mutableStateOf<JoeChannelItem?>(null) }
-    var isOverlayVisible by remember { mutableStateOf(true) }
+    var activePlayableUrl by remember { mutableStateOf("") }
     var showAddPlaylistDialog by remember { mutableStateOf(false) }
 
     val liveChannels = remember(allItems, selectedCategory) {
@@ -476,12 +515,20 @@ fun JoeMainScreen() {
             JoeTab.SERIES -> allItems.filter { it.category == MediaCategory.SERIES }
             JoeTab.PLAYLISTS -> emptyList()
         }
-        val groups = tabItems.map { it.group }.filter { it.isNotBlank() }.distinct().take(15)
+        val groups = tabItems.map { it.group }.filter { it.isNotBlank() }.distinct().take(20)
         listOf("Tümü") + groups
     }
 
     fun nowFormatted(): String {
         return SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date())
+    }
+
+    fun launchPlayer(item: JoeChannelItem) {
+        coroutineScope.launch {
+            val resolvedUrl = JoePlaylistFetcher.resolvePlayableUrl(item, activePlaylist)
+            activePlayableUrl = resolvedUrl
+            activePlayerChannel = item
+        }
     }
 
     fun refreshPlaylist(playlist: JoePlaylist, switchToLiveOnSuccess: Boolean = false) {
@@ -546,43 +593,17 @@ fun JoeMainScreen() {
         }
     }
 
-    if (activePlayerChannel != null) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-        ) {
-            Column(
-                modifier = Modifier.align(Alignment.Center),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.LiveTv,
-                    contentDescription = null,
-                    tint = JoeColors.RedBright,
-                    modifier = Modifier.size(52.dp)
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = activePlayerChannel!!.title,
-                    color = JoeColors.TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp
-                )
+    if (activePlayerChannel != null && activePlayableUrl.isNotEmpty()) {
+        JoeVideoPlayerScreen(
+            currentChannel = activePlayerChannel!!,
+            streamUrl = activePlayableUrl,
+            channels = liveChannels,
+            onSelectChannel = { newChannel -> launchPlayer(newChannel) },
+            onClosePlayer = {
+                activePlayerChannel = null
+                activePlayableUrl = ""
             }
-
-            JoePlayerOverlay(
-                currentChannel = activePlayerChannel!!,
-                channels = liveChannels,
-                isVisible = isOverlayVisible,
-                onToggleVisibility = { isOverlayVisible = !isOverlayVisible },
-                onSelectChannel = { newChannel ->
-                    activePlayerChannel = newChannel
-                    isOverlayVisible = true
-                },
-                onClosePlayer = { activePlayerChannel = null }
-            )
-        }
+        )
         return
     }
 
@@ -676,7 +697,7 @@ fun JoeMainScreen() {
                     } else {
                         LiveContentSection(
                             channels = liveChannels,
-                            onChannelClick = { selectedChannel = it }
+                            onChannelClick = { launchPlayer(it) }
                         )
                     }
                 }
@@ -757,11 +778,372 @@ fun JoeMainScreen() {
                 item = item,
                 onDismiss = { selectedChannel = null },
                 onStartPlayback = {
+                    val target = item
                     selectedChannel = null
-                    activePlayerChannel = item
-                    isOverlayVisible = true
+                    launchPlayer(target)
                 }
             )
+        }
+    }
+}
+
+@OptIn(UnstableApi::class)
+@Composable
+fun JoeVideoPlayerScreen(
+    currentChannel: JoeChannelItem,
+    streamUrl: String,
+    channels: List<JoeChannelItem>,
+    onSelectChannel: (JoeChannelItem) -> Unit,
+    onClosePlayer: () -> Unit
+) {
+    val context = LocalContext.current
+    var isOverlayVisible by remember { mutableStateOf(true) }
+    var showChannelDrawer by remember { mutableStateOf(false) }
+    var selectedAudioMode by remember { mutableStateOf("Türkçe (TR)") }
+    var keepScreenOn by remember { mutableStateOf(true) }
+    var playerError by remember { mutableStateOf<String?>(null) }
+    var isBuffering by remember { mutableStateOf(true) }
+
+    val exoPlayer = remember {
+        ExoPlayer.Builder(context).build().apply {
+            playWhenReady = true
+        }
+    }
+
+    // Yayın URL'si veya kanal değiştiğinde akışı başlat
+    LaunchedEffect(streamUrl) {
+        playerError = null
+        isBuffering = true
+        val fallbackUrl = if (streamUrl.endsWith(".m3u8")) {
+            streamUrl.removeSuffix(".m3u8") + ".ts"
+        } else {
+            streamUrl
+        }
+        exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = true
+
+        exoPlayer.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                isBuffering = playbackState == Player.STATE_BUFFERING
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                if (fallbackUrl != streamUrl && exoPlayer.currentMediaItem?.localConfiguration?.uri.toString() == streamUrl) {
+                    exoPlayer.setMediaItem(MediaItem.fromUri(fallbackUrl))
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = true
+                } else {
+                    isBuffering = false
+                    playerError = "Yayın açılamadı: ${error.errorCodeName}"
+                }
+            }
+        })
+    }
+
+    // Türkçe ses / altyazı tercihi
+    LaunchedEffect(selectedAudioMode) {
+        val paramsBuilder = exoPlayer.trackSelectionParameters.buildUpon()
+        when (selectedAudioMode) {
+            "Türkçe (TR)" -> {
+                paramsBuilder
+                    .setPreferredAudioLanguages("tr", "tur", "tr-TR")
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            }
+            "Orijinal" -> {
+                paramsBuilder
+                    .setPreferredAudioLanguages()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            }
+            "Türkçe Altyazı" -> {
+                paramsBuilder
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setPreferredTextLanguages("tr", "tur", "tr-TR")
+            }
+        }
+        exoPlayer.trackSelectionParameters = paramsBuilder.build()
+    }
+
+    DisposableEffect(keepScreenOn) {
+        val window = (context as? Activity)?.window
+        if (keepScreenOn) {
+            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            exoPlayer.release()
+        }
+    }
+
+    val audioTracks = listOf("Türkçe (TR)", "Orijinal", "Türkçe Altyazı")
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .clickable { isOverlayVisible = !isOverlayVisible }
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    player = exoPlayer
+                    useController = false
+                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    layoutParams = FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        if (isBuffering && playerError == null) {
+            CircularProgressIndicator(
+                color = JoeColors.RedBright,
+                modifier = Modifier.align(Alignment.Center)
+            )
+        }
+
+        playerError?.let { errText ->
+            Column(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(24.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(JoeColors.CardDark.copy(alpha = 0.95f))
+                    .border(1.dp, JoeColors.RedBright, RoundedCornerShape(14.dp))
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = errText,
+                    color = JoeColors.TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Button(
+                    onClick = {
+                        playerError = null
+                        isBuffering = true
+                        exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
+                        exoPlayer.prepare()
+                        exoPlayer.playWhenReady = true
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = JoeColors.RedPrimary,
+                        contentColor = JoeColors.TextPrimary
+                    )
+                ) {
+                    Text("Tekrar Dene", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = isOverlayVisible,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Black.copy(alpha = 0.82f),
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.88f)
+                            )
+                        )
+                    )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.TopCenter)
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        IconButton(
+                            onClick = onClosePlayer,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(JoeColors.CardDark.copy(alpha = 0.9f))
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ArrowBack,
+                                contentDescription = "Geri",
+                                tint = JoeColors.TextPrimary
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Column {
+                            Text(
+                                text = currentChannel.title,
+                                color = JoeColors.TextPrimary,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = currentChannel.subtitle,
+                                color = JoeColors.TextSecondary,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(JoeColors.CardDark.copy(alpha = 0.9f))
+                            .border(
+                                1.dp,
+                                if (keepScreenOn) JoeColors.RedBright else JoeColors.RedMuted,
+                                RoundedCornerShape(10.dp)
+                            )
+                            .clickable { keepScreenOn = !keepScreenOn }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Lightbulb,
+                            contentDescription = "Ekran Açık Kalsın",
+                            tint = if (keepScreenOn) JoeColors.RedBright else JoeColors.TextSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (keepScreenOn) "Açık" else "Normal",
+                            color = JoeColors.TextPrimary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        audioTracks.forEach { track ->
+                            val active = selectedAudioMode == track
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        if (active) JoeColors.RedPrimary
+                                        else JoeColors.CardDark.copy(alpha = 0.92f)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (active) JoeColors.RedBright else JoeColors.RedMuted,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable { selectedAudioMode = track }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    text = track,
+                                    color = JoeColors.TextPrimary,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+
+                    if (channels.isNotEmpty()) {
+                        Button(
+                            onClick = { showChannelDrawer = !showChannelDrawer },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = JoeColors.RedPrimary,
+                                contentColor = JoeColors.TextPrimary
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(imageVector = Icons.Rounded.QueueMusic, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (showChannelDrawer) "Kanal Listesini Gizle" else "Hızlı Kanal Listesi",
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = isOverlayVisible && showChannelDrawer && channels.isNotEmpty(),
+            enter = fadeIn(),
+            exit = fadeOut(),
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 16.dp)
+                .width(260.dp)
+                .heightIn(max = 320.dp)
+        ) {
+            LazyColumn(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(JoeColors.SurfaceDark.copy(alpha = 0.96f))
+                    .border(1.dp, JoeColors.RedBright.copy(alpha = 0.5f), RoundedCornerShape(14.dp)),
+                contentPadding = PaddingValues(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(channels, key = { it.id }) { item ->
+                    val isCurrent = item.id == currentChannel.id
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (isCurrent) JoeColors.RedPrimary.copy(alpha = 0.35f) else JoeColors.CardDark)
+                            .clickable {
+                                onSelectChannel(item)
+                                showChannelDrawer = false
+                            }
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = item.title,
+                            color = if (isCurrent) JoeColors.RedBright else JoeColors.TextPrimary,
+                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -1506,236 +1888,4 @@ private fun QuickLaunchDialog(
             }
         }
     )
-}
-
-@Composable
-fun JoePlayerOverlay(
-    currentChannel: JoeChannelItem,
-    channels: List<JoeChannelItem>,
-    isVisible: Boolean,
-    onToggleVisibility: () -> Unit,
-    onSelectChannel: (JoeChannelItem) -> Unit,
-    onClosePlayer: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    var showChannelDrawer by remember { mutableStateOf(false) }
-    var selectedAudioTrack by remember { mutableStateOf("Türkçe (TR)") }
-    var keepScreenOn by remember { mutableStateOf(true) }
-
-    val audioTracks = listOf("Türkçe (TR)", "Orijinal", "Türkçe Altyazı")
-
-    DisposableEffect(keepScreenOn) {
-        val window = (context as? Activity)?.window
-        if (keepScreenOn) {
-            window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        } else {
-            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-        onDispose {
-            window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-    }
-
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .clickable { onToggleVisibility() }
-    ) {
-        AnimatedVisibility(
-            visible = isVisible,
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color.Black.copy(alpha = 0.82f),
-                                Color.Transparent,
-                                Color.Black.copy(alpha = 0.88f)
-                            )
-                        )
-                    )
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter)
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        IconButton(
-                            onClick = onClosePlayer,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(JoeColors.CardDark.copy(alpha = 0.9f))
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.ArrowBack,
-                                contentDescription = "Geri",
-                                tint = JoeColors.TextPrimary
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.width(12.dp))
-
-                        Column {
-                            Text(
-                                text = currentChannel.title,
-                                color = JoeColors.TextPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = currentChannel.subtitle,
-                                color = JoeColors.TextSecondary,
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(JoeColors.CardDark.copy(alpha = 0.9f))
-                            .border(
-                                1.dp,
-                                if (keepScreenOn) JoeColors.RedBright else JoeColors.RedMuted,
-                                RoundedCornerShape(10.dp)
-                            )
-                            .clickable { keepScreenOn = !keepScreenOn }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Lightbulb,
-                            contentDescription = "Ekran Açık Kalsın",
-                            tint = if (keepScreenOn) JoeColors.RedBright else JoeColors.TextSecondary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = if (keepScreenOn) "Açık" else "Normal",
-                            color = JoeColors.TextPrimary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.BottomCenter)
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        audioTracks.forEach { track ->
-                            val active = selectedAudioTrack == track
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(
-                                        if (active) JoeColors.RedPrimary
-                                        else JoeColors.CardDark.copy(alpha = 0.92f)
-                                    )
-                                    .border(
-                                        1.dp,
-                                        if (active) JoeColors.RedBright else JoeColors.RedMuted,
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .clickable { selectedAudioTrack = track }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                            ) {
-                                Text(
-                                    text = track,
-                                    color = JoeColors.TextPrimary,
-                                    fontSize = 12.sp,
-                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
-                                )
-                            }
-                        }
-                    }
-
-                    Button(
-                        onClick = { showChannelDrawer = !showChannelDrawer },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = JoeColors.RedPrimary,
-                            contentColor = JoeColors.TextPrimary
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(imageVector = Icons.Rounded.QueueMusic, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (showChannelDrawer) "Kanal Listesini Gizle" else "Hızlı Kanal Listesi",
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-        }
-
-        AnimatedVisibility(
-            visible = isVisible && showChannelDrawer && channels.isNotEmpty(),
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .padding(end = 16.dp)
-                .width(260.dp)
-                .heightIn(max = 320.dp)
-        ) {
-            LazyColumn(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(JoeColors.SurfaceDark.copy(alpha = 0.96f))
-                    .border(1.dp, JoeColors.RedBright.copy(alpha = 0.5f), RoundedCornerShape(14.dp)),
-                contentPadding = PaddingValues(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(channels, key = { it.id }) { item ->
-                    val isCurrent = item.id == currentChannel.id
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (isCurrent) JoeColors.RedPrimary.copy(alpha = 0.35f) else JoeColors.CardDark)
-                            .clickable {
-                                onSelectChannel(item)
-                                showChannelDrawer = false
-                            }
-                            .padding(horizontal = 10.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = item.title,
-                            color = if (isCurrent) JoeColors.RedBright else JoeColors.TextPrimary,
-                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                            fontSize = 13.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-        }
-    }
 }
