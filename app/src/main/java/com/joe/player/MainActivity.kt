@@ -2959,6 +2959,14 @@ private fun JoeApp() {
                                     },
                                     placeholder = { Text("User-Agent (gerekliyse)", color = TextSecondaryLight) },
                                     singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White,
+                                        focusedContainerColor = ElevatedCardBg,
+                                        unfocusedContainerColor = ElevatedCardBg,
+                                        focusedBorderColor = AccentRed,
+                                        unfocusedBorderColor = BorderSubtle
+                                    ),
                                     modifier = Modifier.fillMaxWidth()
                                 )
 
@@ -2970,6 +2978,14 @@ private fun JoeApp() {
                                     },
                                     placeholder = { Text("Referer (gerekliyse)", color = TextSecondaryLight) },
                                     singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White,
+                                        focusedContainerColor = ElevatedCardBg,
+                                        unfocusedContainerColor = ElevatedCardBg,
+                                        focusedBorderColor = AccentRed,
+                                        unfocusedBorderColor = BorderSubtle
+                                    ),
                                     modifier = Modifier.fillMaxWidth()
                                 )
 
@@ -2981,6 +2997,14 @@ private fun JoeApp() {
                                     },
                                     placeholder = { Text("Origin (gerekliyse)", color = TextSecondaryLight) },
                                     singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedTextColor = Color.White,
+                                        unfocusedTextColor = Color.White,
+                                        focusedContainerColor = ElevatedCardBg,
+                                        unfocusedContainerColor = ElevatedCardBg,
+                                        focusedBorderColor = AccentRed,
+                                        unfocusedBorderColor = BorderSubtle
+                                    ),
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
