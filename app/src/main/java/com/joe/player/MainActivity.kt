@@ -2,11 +2,13 @@ package com.joe.player
 
 import android.app.Activity
 import android.content.Context
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
@@ -37,11 +39,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -323,7 +327,6 @@ object JoePlaylistFetcher {
         val pass = URLEncoder.encode(playlist.password.trim(), "UTF-8")
         val items = mutableListOf<JoeChannelItem>()
 
-        // 1. Canlı Kanallar
         runCatching {
             val liveJson = downloadText("$baseUrl/player_api.php?username=$user&password=$pass&action=get_live_streams")
             val array = JSONArray(liveJson)
@@ -348,7 +351,6 @@ object JoePlaylistFetcher {
             }
         }
 
-        // 2. Filmler (VOD)
         runCatching {
             val vodJson = downloadText("$baseUrl/player_api.php?username=$user&password=$pass&action=get_vod_streams")
             val array = JSONArray(vodJson)
@@ -374,7 +376,6 @@ object JoePlaylistFetcher {
             }
         }
 
-        // 3. Diziler (Bölüm akışlarını çözümle)
         runCatching {
             val seriesJson = downloadText("$baseUrl/player_api.php?username=$user&password=$pass&action=get_series")
             val array = JSONArray(seriesJson)
@@ -797,16 +798,59 @@ fun JoeVideoPlayerScreen(
     onClosePlayer: () -> Unit
 ) {
     val context = LocalContext.current
+    val activity = context as? Activity
+
     var isOverlayVisible by remember { mutableStateOf(true) }
     var showChannelDrawer by remember { mutableStateOf(false) }
     var selectedAudioMode by remember { mutableStateOf("Türkçe (TR)") }
     var keepScreenOn by remember { mutableStateOf(true) }
+    var isFullLandscape by remember { mutableStateOf(true) }
+    var resizeModeIndex by remember { mutableIntStateOf(0) }
     var playerError by remember { mutableStateOf<String?>(null) }
     var isBuffering by remember { mutableStateOf(true) }
+
+    val resizeModes = listOf(
+        AspectRatioFrameLayout.RESIZE_MODE_FIT to "Sığdır",
+        AspectRatioFrameLayout.RESIZE_MODE_FILL to "Tam Ekran",
+        AspectRatioFrameLayout.RESIZE_MODE_ZOOM to "Yakınlaştır"
+    )
 
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
             playWhenReady = true
+        }
+    }
+
+    fun exitFullScreenAndClose() {
+        activity?.let { act ->
+            act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            WindowCompat.setDecorFitsSystemWindows(act.window, true)
+            WindowInsetsControllerCompat(act.window, act.window.decorView).show(
+                WindowInsetsCompat.Type.systemBars()
+            )
+        }
+        onClosePlayer()
+    }
+
+    BackHandler {
+        exitFullScreenAndClose()
+    }
+
+    // Tam geniş ekran (yatay + sistem çubuklarını gizleme) yönetimi
+    LaunchedEffect(isFullLandscape) {
+        activity?.let { act ->
+            val insetsController = WindowInsetsControllerCompat(act.window, act.window.decorView)
+            if (isFullLandscape) {
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                WindowCompat.setDecorFitsSystemWindows(act.window, false)
+                insetsController.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                insetsController.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                WindowCompat.setDecorFitsSystemWindows(act.window, true)
+                insetsController.show(WindowInsetsCompat.Type.systemBars())
+            }
         }
     }
 
@@ -865,7 +909,7 @@ fun JoeVideoPlayerScreen(
     }
 
     DisposableEffect(keepScreenOn) {
-        val window = (context as? Activity)?.window
+        val window = activity?.window
         if (keepScreenOn) {
             window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } else {
@@ -878,11 +922,20 @@ fun JoeVideoPlayerScreen(
 
     DisposableEffect(Unit) {
         onDispose {
+            activity?.let { act ->
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                WindowCompat.setDecorFitsSystemWindows(act.window, true)
+                WindowInsetsControllerCompat(act.window, act.window.decorView).show(
+                    WindowInsetsCompat.Type.systemBars()
+                )
+            }
             exoPlayer.release()
         }
     }
 
     val audioTracks = listOf("Türkçe (TR)", "Orijinal", "Türkçe Altyazı")
+    val currentResizeMode = resizeModes[resizeModeIndex].first
+    val currentResizeLabel = resizeModes[resizeModeIndex].second
 
     Box(
         modifier = Modifier
@@ -895,12 +948,15 @@ fun JoeVideoPlayerScreen(
                 PlayerView(ctx).apply {
                     player = exoPlayer
                     useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    resizeMode = currentResizeMode
                     layoutParams = FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT
                     )
                 }
+            },
+            update = { view ->
+                view.resizeMode = currentResizeMode
             },
             modifier = Modifier.fillMaxSize()
         )
@@ -966,6 +1022,7 @@ fun JoeVideoPlayerScreen(
                         )
                     )
             ) {
+                // Üst Bilgi ve Geniş Ekran Kontrolleri
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -979,7 +1036,7 @@ fun JoeVideoPlayerScreen(
                         modifier = Modifier.weight(1f)
                     ) {
                         IconButton(
-                            onClick = onClosePlayer,
+                            onClick = { exitFullScreenAndClose() },
                             modifier = Modifier
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(JoeColors.CardDark.copy(alpha = 0.9f))
@@ -1012,35 +1069,91 @@ fun JoeVideoPlayerScreen(
                         }
                     }
 
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(JoeColors.CardDark.copy(alpha = 0.9f))
-                            .border(
-                                1.dp,
-                                if (keepScreenOn) JoeColors.RedBright else JoeColors.RedMuted,
-                                RoundedCornerShape(10.dp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // En-Boy Oranı (Sığdır / Tam Ekran / Yakınlaştır)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(JoeColors.CardDark.copy(alpha = 0.9f))
+                                .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(10.dp))
+                                .clickable {
+                                    resizeModeIndex = (resizeModeIndex + 1) % resizeModes.size
+                                }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.AspectRatio,
+                                contentDescription = "Oran",
+                                tint = JoeColors.RedBright,
+                                modifier = Modifier.size(16.dp)
                             )
-                            .clickable { keepScreenOn = !keepScreenOn }
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Lightbulb,
-                            contentDescription = "Ekran Açık Kalsın",
-                            tint = if (keepScreenOn) JoeColors.RedBright else JoeColors.TextSecondary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = if (keepScreenOn) "Açık" else "Normal",
-                            color = JoeColors.TextPrimary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = currentResizeLabel,
+                                color = JoeColors.TextPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        // Yatay / Dikey Geniş Ekran Geçişi
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(
+                                    if (isFullLandscape) JoeColors.RedPrimary
+                                    else JoeColors.CardDark.copy(alpha = 0.9f)
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isFullLandscape) JoeColors.RedBright else JoeColors.RedMuted,
+                                    RoundedCornerShape(10.dp)
+                                )
+                                .clickable { isFullLandscape = !isFullLandscape }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isFullLandscape) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                                contentDescription = "Geniş Ekran",
+                                tint = JoeColors.TextPrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (isFullLandscape) "Geniş" else "Dikey",
+                                color = JoeColors.TextPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        // Ekran Uyanık Kalma
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(JoeColors.CardDark.copy(alpha = 0.9f))
+                                .border(
+                                    1.dp,
+                                    if (keepScreenOn) JoeColors.RedBright else JoeColors.RedMuted,
+                                    RoundedCornerShape(10.dp)
+                                )
+                                .clickable { keepScreenOn = !keepScreenOn }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Lightbulb,
+                                contentDescription = "Ekran Açık Kalsın",
+                                tint = if (keepScreenOn) JoeColors.RedBright else JoeColors.TextSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
 
+                // Alt Kontroller: Ses / Altyazı ve Hızlı Kanal Listesi
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1109,7 +1222,7 @@ fun JoeVideoPlayerScreen(
                 .align(Alignment.CenterEnd)
                 .padding(end = 16.dp)
                 .width(260.dp)
-                .heightIn(max = 320.dp)
+                .heightIn(max = 260.dp)
         ) {
             LazyColumn(
                 modifier = Modifier
