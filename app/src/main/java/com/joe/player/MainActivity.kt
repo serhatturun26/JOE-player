@@ -33,8 +33,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -68,12 +74,18 @@ data class JoePlaylist(
     val lastUpdated: String = ""
 )
 
+enum class MediaCategory {
+    LIVE, MOVIE, SERIES
+}
+
 data class JoeChannelItem(
     val id: String,
     val title: String,
     val subtitle: String,
+    val group: String = "Genel",
     val streamUrl: String = "",
-    val isLive: Boolean = false
+    val category: MediaCategory = MediaCategory.LIVE,
+    val isLive: Boolean = true
 )
 
 enum class JoeTab(val label: String, val icon: ImageVector) {
@@ -87,6 +99,7 @@ object JoePlaylistStorage {
     private const val PREFS_NAME = "joe_player_prefs"
     private const val KEY_PLAYLISTS = "saved_playlists_json"
     private const val KEY_ACTIVE_ID = "active_playlist_id"
+    private const val KEY_CACHE_PREFIX = "playlist_items_"
 
     fun loadPlaylists(context: Context): List<JoePlaylist> {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -135,6 +148,60 @@ object JoePlaylistStorage {
             .apply()
     }
 
+    fun saveCachedItems(context: Context, playlistId: String, items: List<JoeChannelItem>) {
+        val array = JSONArray()
+        items.forEach { item ->
+            val obj = JSONObject().apply {
+                put("id", item.id)
+                put("title", item.title)
+                put("subtitle", item.subtitle)
+                put("group", item.group)
+                put("streamUrl", item.streamUrl)
+                put("category", item.category.name)
+                put("isLive", item.isLive)
+            }
+            array.put(obj)
+        }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_CACHE_PREFIX + playlistId, array.toString())
+            .apply()
+    }
+
+    fun loadCachedItems(context: Context, playlistId: String): List<JoeChannelItem> {
+        val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_CACHE_PREFIX + playlistId, null) ?: return emptyList()
+        val result = mutableListOf<JoeChannelItem>()
+        try {
+            val array = JSONArray(raw)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val catName = obj.optString("category", MediaCategory.LIVE.name)
+                val category = runCatching { MediaCategory.valueOf(catName) }.getOrDefault(MediaCategory.LIVE)
+                result.add(
+                    JoeChannelItem(
+                        id = obj.getString("id"),
+                        title = obj.getString("title"),
+                        subtitle = obj.optString("subtitle", ""),
+                        group = obj.optString("group", "Genel"),
+                        streamUrl = obj.optString("streamUrl", ""),
+                        category = category,
+                        isLive = obj.optBoolean("isLive", true)
+                    )
+                )
+            }
+        } catch (_: Exception) {
+        }
+        return result
+    }
+
+    fun deleteCachedItems(context: Context, playlistId: String) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(KEY_CACHE_PREFIX + playlistId)
+            .apply()
+    }
+
     fun getActivePlaylistId(context: Context): String? {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getString(KEY_ACTIVE_ID, null)
@@ -145,6 +212,186 @@ object JoePlaylistStorage {
             .edit()
             .putString(KEY_ACTIVE_ID, id)
             .apply()
+    }
+}
+
+object JoePlaylistFetcher {
+    suspend fun fetchAndParse(playlist: JoePlaylist): Result<List<JoeChannelItem>> = withContext(Dispatchers.IO) {
+        try {
+            val items = when (playlist.type) {
+                PlaylistType.XTREAM -> fetchXtream(playlist)
+                PlaylistType.M3U, PlaylistType.GITHUB -> fetchM3u(playlist.serverUrl)
+            }
+            if (items.isEmpty()) {
+                Result.failure(Exception("Listeden içerik alınamadı. Bağlantı veya giriş bilgilerini kontrol edin."))
+            } else {
+                Result.success(items)
+            }
+        } catch (e: Exception) {
+            Result.failure(Exception("Bağlantı hatası: ${e.message ?: "Bilinmeyen hata"}"))
+        }
+    }
+
+    private fun normalizeBaseUrl(rawUrl: String): String {
+        var url = rawUrl.trim()
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            url = "http://$url"
+        }
+        return url.trimEnd('/')
+    }
+
+    private fun downloadText(urlString: String): String {
+        val url = URL(urlString)
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15000
+            readTimeout = 20000
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "JOE-Player/1.0")
+        }
+        val code = conn.responseCode
+        if (code !in 200..299) {
+            throw Exception("HTTP $code")
+        }
+        return conn.inputStream.bufferedReader().use { it.readText() }
+    }
+
+    private fun fetchM3u(rawUrl: String): List<JoeChannelItem> {
+        val url = normalizeBaseUrl(rawUrl)
+        val content = downloadText(url)
+        val lines = content.lines()
+        val items = mutableListOf<JoeChannelItem>()
+
+        var currentTitle = ""
+        var currentGroup = "Genel"
+
+        for (rawLine in lines) {
+            val line = rawLine.trim()
+            if (line.isEmpty()) continue
+
+            if (line.startsWith("#EXTINF:", ignoreCase = true)) {
+                val groupMatch = Regex("""group-title="([^"]*)"""", RegexOption.IGNORE_CASE).find(line)
+                currentGroup = groupMatch?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() } ?: "Genel"
+                val commaIndex = line.lastIndexOf(',')
+                currentTitle = if (commaIndex != -1 && commaIndex + 1 < line.length) {
+                    line.substring(commaIndex + 1).trim()
+                } else {
+                    "Kanal ${items.size + 1}"
+                }
+            } else if (!line.startsWith("#") && (line.startsWith("http://") || line.startsWith("https://"))) {
+                val lowerUrl = line.lowercase(Locale.ROOT)
+                val lowerGroup = currentGroup.lowercase(Locale.ROOT)
+                val category = when {
+                    lowerUrl.contains("/series/") || lowerGroup.contains("dizi") || lowerGroup.contains("series") -> MediaCategory.SERIES
+                    lowerUrl.contains("/movie/") || lowerUrl.endsWith(".mp4") || lowerUrl.endsWith(".mkv") || lowerUrl.endsWith(".avi") || lowerGroup.contains("film") || lowerGroup.contains("vod") || lowerGroup.contains("movie") -> MediaCategory.MOVIE
+                    else -> MediaCategory.LIVE
+                }
+                val title = currentTitle.ifBlank { "Yayın ${items.size + 1}" }
+                items.add(
+                    JoeChannelItem(
+                        id = "${items.size}_${title.hashCode()}",
+                        title = title,
+                        subtitle = currentGroup,
+                        group = currentGroup,
+                        streamUrl = line,
+                        category = category,
+                        isLive = category == MediaCategory.LIVE
+                    )
+                )
+                currentTitle = ""
+            }
+        }
+        return items
+    }
+
+    private fun fetchXtream(playlist: JoePlaylist): List<JoeChannelItem> {
+        val baseUrl = normalizeBaseUrl(playlist.serverUrl)
+        val user = URLEncoder.encode(playlist.username.trim(), "UTF-8")
+        val pass = URLEncoder.encode(playlist.password.trim(), "UTF-8")
+        val items = mutableListOf<JoeChannelItem>()
+
+        // 1. Canlı Kanallar
+        runCatching {
+            val liveJson = downloadText("$baseUrl/player_api.php?username=$user&password=$pass&action=get_live_streams")
+            val array = JSONArray(liveJson)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val streamId = obj.optString("stream_id", "")
+                val name = obj.optString("name", "Kanal ${i + 1}")
+                val categoryName = obj.optString("category_name", "Canlı TV").ifBlank { "Canlı TV" }
+                if (streamId.isNotEmpty()) {
+                    items.add(
+                        JoeChannelItem(
+                            id = "live_$streamId",
+                            title = name,
+                            subtitle = categoryName,
+                            group = categoryName,
+                            streamUrl = "$baseUrl/live/${playlist.username}/${playlist.password}/$streamId.ts",
+                            category = MediaCategory.LIVE,
+                            isLive = true
+                        )
+                    )
+                }
+            }
+        }
+
+        // 2. Filmler (VOD)
+        runCatching {
+            val vodJson = downloadText("$baseUrl/player_api.php?username=$user&password=$pass&action=get_vod_streams")
+            val array = JSONArray(vodJson)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val streamId = obj.optString("stream_id", "")
+                val name = obj.optString("name", "Film ${i + 1}")
+                val ext = obj.optString("container_extension", "mp4").ifBlank { "mp4" }
+                val categoryName = obj.optString("category_name", "Filmler").ifBlank { "Filmler" }
+                if (streamId.isNotEmpty()) {
+                    items.add(
+                        JoeChannelItem(
+                            id = "vod_$streamId",
+                            title = name,
+                            subtitle = categoryName,
+                            group = categoryName,
+                            streamUrl = "$baseUrl/movie/${playlist.username}/${playlist.password}/$streamId.$ext",
+                            category = MediaCategory.MOVIE,
+                            isLive = false
+                        )
+                    )
+                }
+            }
+        }
+
+        // 3. Diziler
+        runCatching {
+            val seriesJson = downloadText("$baseUrl/player_api.php?username=$user&password=$pass&action=get_series")
+            val array = JSONArray(seriesJson)
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                val seriesId = obj.optString("series_id", "")
+                val name = obj.optString("name", "Dizi ${i + 1}")
+                val categoryName = obj.optString("category_name", "Diziler").ifBlank { "Diziler" }
+                if (seriesId.isNotEmpty()) {
+                    items.add(
+                        JoeChannelItem(
+                            id = "series_$seriesId",
+                            title = name,
+                            subtitle = categoryName,
+                            group = categoryName,
+                            streamUrl = "$baseUrl/player_api.php?username=$user&password=$pass&action=get_series_info&series_id=$seriesId",
+                            category = MediaCategory.SERIES,
+                            isLive = false
+                        )
+                    )
+                }
+            }
+        }
+
+        // Xtream API JSON dönmezse M3U çıktısını yedek olarak dene
+        if (items.isEmpty()) {
+            return fetchM3u("$baseUrl/get.php?username=$user&password=$pass&type=m3u_plus&output=ts")
+        }
+
+        return items
     }
 }
 
@@ -182,8 +429,23 @@ fun JoeAppTheme(content: @Composable () -> Unit) {
 @Composable
 fun JoeMainScreen() {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
     var playlists by remember { mutableStateOf(JoePlaylistStorage.loadPlaylists(context)) }
     var activePlaylistId by remember { mutableStateOf(JoePlaylistStorage.getActivePlaylistId(context)) }
+
+    val activePlaylist = remember(playlists, activePlaylistId) {
+        playlists.find { it.id == activePlaylistId } ?: playlists.firstOrNull()
+    }
+
+    var allItems by remember(activePlaylist?.id) {
+        mutableStateOf(
+            activePlaylist?.let { JoePlaylistStorage.loadCachedItems(context, it.id) } ?: emptyList()
+        )
+    }
+
+    var isRefreshing by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf<String?>(null) }
 
     var selectedTab by remember {
         mutableStateOf(if (playlists.isEmpty()) JoeTab.PLAYLISTS else JoeTab.LIVE)
@@ -194,19 +456,62 @@ fun JoeMainScreen() {
     var isOverlayVisible by remember { mutableStateOf(true) }
     var showAddPlaylistDialog by remember { mutableStateOf(false) }
 
-    val activePlaylist = remember(playlists, activePlaylistId) {
-        playlists.find { it.id == activePlaylistId } ?: playlists.firstOrNull()
+    val liveChannels = remember(allItems, selectedCategory) {
+        val base = allItems.filter { it.category == MediaCategory.LIVE }
+        if (selectedCategory == "Tümü") base else base.filter { it.group.equals(selectedCategory, ignoreCase = true) }
+    }
+    val movieItems = remember(allItems, selectedCategory) {
+        val base = allItems.filter { it.category == MediaCategory.MOVIE }
+        if (selectedCategory == "Tümü") base else base.filter { it.group.equals(selectedCategory, ignoreCase = true) }
+    }
+    val seriesItems = remember(allItems, selectedCategory) {
+        val base = allItems.filter { it.category == MediaCategory.SERIES }
+        if (selectedCategory == "Tümü") base else base.filter { it.group.equals(selectedCategory, ignoreCase = true) }
     }
 
-    // Gerçek liste verisi bağlandığında bu listeler doldurulur; demo veri içermez
-    val liveChannels = remember(activePlaylist) { emptyList<JoeChannelItem>() }
-    val movieItems = remember(activePlaylist) { emptyList<JoeChannelItem>() }
-    val seriesItems = remember(activePlaylist) { emptyList<JoeChannelItem>() }
-
-    val categories = listOf("Tümü", "Ulusal", "Spor", "Sinema", "Belgesel", "Türkçe Ses")
+    val dynamicCategories = remember(allItems, selectedTab) {
+        val tabItems = when (selectedTab) {
+            JoeTab.LIVE -> allItems.filter { it.category == MediaCategory.LIVE }
+            JoeTab.MOVIES -> allItems.filter { it.category == MediaCategory.MOVIE }
+            JoeTab.SERIES -> allItems.filter { it.category == MediaCategory.SERIES }
+            JoeTab.PLAYLISTS -> emptyList()
+        }
+        val groups = tabItems.map { it.group }.filter { it.isNotBlank() }.distinct().take(15)
+        listOf("Tümü") + groups
+    }
 
     fun nowFormatted(): String {
         return SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date())
+    }
+
+    fun refreshPlaylist(playlist: JoePlaylist, switchToLiveOnSuccess: Boolean = false) {
+        if (isRefreshing) return
+        isRefreshing = true
+        statusMessage = "\"${playlist.name}\" güncelleniyor..."
+
+        coroutineScope.launch {
+            val result = JoePlaylistFetcher.fetchAndParse(playlist)
+            isRefreshing = false
+            result.onSuccess { fetchedItems ->
+                JoePlaylistStorage.saveCachedItems(context, playlist.id, fetchedItems)
+                val updatedList = playlists.map {
+                    if (it.id == playlist.id) it.copy(lastUpdated = nowFormatted()) else it
+                }
+                playlists = updatedList
+                JoePlaylistStorage.savePlaylists(context, updatedList)
+
+                if (activePlaylist?.id == playlist.id || activePlaylistId == playlist.id) {
+                    allItems = fetchedItems
+                    selectedCategory = "Tümü"
+                }
+                statusMessage = "${fetchedItems.size} içerik yüklendi."
+                if (switchToLiveOnSuccess) {
+                    selectedTab = JoeTab.LIVE
+                }
+            }.onFailure { err ->
+                statusMessage = err.message ?: "Liste güncellenemedi."
+            }
+        }
     }
 
     fun addPlaylist(newPlaylist: JoePlaylist) {
@@ -215,20 +520,14 @@ fun JoeMainScreen() {
         JoePlaylistStorage.savePlaylists(context, updated)
         activePlaylistId = newPlaylist.id
         JoePlaylistStorage.setActivePlaylistId(context, newPlaylist.id)
-    }
-
-    fun refreshPlaylist(id: String) {
-        val updated = playlists.map {
-            if (it.id == id) it.copy(lastUpdated = nowFormatted()) else it
-        }
-        playlists = updated
-        JoePlaylistStorage.savePlaylists(context, updated)
+        refreshPlaylist(newPlaylist, switchToLiveOnSuccess = true)
     }
 
     fun deletePlaylist(id: String) {
         val updated = playlists.filterNot { it.id == id }
         playlists = updated
         JoePlaylistStorage.savePlaylists(context, updated)
+        JoePlaylistStorage.deleteCachedItems(context, id)
         if (activePlaylistId == id) {
             val nextId = updated.firstOrNull()?.id
             activePlaylistId = nextId
@@ -239,6 +538,12 @@ fun JoeMainScreen() {
     fun selectActivePlaylist(id: String) {
         activePlaylistId = id
         JoePlaylistStorage.setActivePlaylistId(context, id)
+        selectedCategory = "Tümü"
+        val cached = JoePlaylistStorage.loadCachedItems(context, id)
+        allItems = cached
+        if (cached.isEmpty()) {
+            playlists.find { it.id == id }?.let { refreshPlaylist(it) }
+        }
     }
 
     if (activePlayerChannel != null) {
@@ -286,15 +591,19 @@ fun JoeMainScreen() {
         topBar = {
             JoeTopBar(
                 activePlaylistName = activePlaylist?.name,
+                isRefreshing = isRefreshing,
                 onRefreshClick = {
-                    activePlaylist?.let { refreshPlaylist(it.id) }
+                    activePlaylist?.let { refreshPlaylist(it) }
                 }
             )
         },
         bottomBar = {
             JoeBottomBar(
                 selectedTab = selectedTab,
-                onSelectTab = { selectedTab = it }
+                onSelectTab = {
+                    selectedTab = it
+                    selectedCategory = "Tümü"
+                }
             )
         }
     ) { innerPadding ->
@@ -311,9 +620,43 @@ fun JoeMainScreen() {
                     )
                 )
         ) {
-            if (selectedTab != JoeTab.PLAYLISTS && activePlaylist != null) {
+            statusMessage?.let { msg ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(JoeColors.RedMuted.copy(alpha = 0.85f))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = msg,
+                        color = JoeColors.TextPrimary,
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Kapat",
+                        tint = JoeColors.TextPrimary,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clickable { statusMessage = null }
+                    )
+                }
+            }
+
+            if (isRefreshing) {
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = JoeColors.RedBright,
+                    trackColor = JoeColors.CardDark
+                )
+            }
+
+            if (selectedTab != JoeTab.PLAYLISTS && activePlaylist != null && dynamicCategories.size > 1) {
                 CategoryFilterRow(
-                    categories = categories,
+                    categories = dynamicCategories,
                     selectedCategory = selectedCategory,
                     onSelectCategory = { selectedCategory = it }
                 )
@@ -326,8 +669,9 @@ fun JoeMainScreen() {
                             hasPlaylist = activePlaylist != null,
                             playlistName = activePlaylist?.name,
                             sectionTitle = "Canlı TV",
+                            isRefreshing = isRefreshing,
                             onGoToPlaylists = { selectedTab = JoeTab.PLAYLISTS },
-                            onRefreshActive = { activePlaylist?.let { refreshPlaylist(it.id) } }
+                            onRefreshActive = { activePlaylist?.let { refreshPlaylist(it) } }
                         )
                     } else {
                         LiveContentSection(
@@ -342,12 +686,13 @@ fun JoeMainScreen() {
                             hasPlaylist = activePlaylist != null,
                             playlistName = activePlaylist?.name,
                             sectionTitle = "Filmler",
+                            isRefreshing = isRefreshing,
                             onGoToPlaylists = { selectedTab = JoeTab.PLAYLISTS },
-                            onRefreshActive = { activePlaylist?.let { refreshPlaylist(it.id) } }
+                            onRefreshActive = { activePlaylist?.let { refreshPlaylist(it) } }
                         )
                     } else {
                         MediaGridSection(
-                            title = "Filmler",
+                            title = "Filmler (${movieItems.size})",
                             items = movieItems,
                             onItemClick = { selectedChannel = it }
                         )
@@ -359,12 +704,13 @@ fun JoeMainScreen() {
                             hasPlaylist = activePlaylist != null,
                             playlistName = activePlaylist?.name,
                             sectionTitle = "Diziler",
+                            isRefreshing = isRefreshing,
                             onGoToPlaylists = { selectedTab = JoeTab.PLAYLISTS },
-                            onRefreshActive = { activePlaylist?.let { refreshPlaylist(it.id) } }
+                            onRefreshActive = { activePlaylist?.let { refreshPlaylist(it) } }
                         )
                     } else {
                         MediaGridSection(
-                            title = "Diziler",
+                            title = "Diziler (${seriesItems.size})",
                             items = seriesItems,
                             onItemClick = { selectedChannel = it }
                         )
@@ -374,9 +720,12 @@ fun JoeMainScreen() {
                     PlaylistManagementSection(
                         playlists = playlists,
                         activePlaylistId = activePlaylist?.id,
+                        isRefreshing = isRefreshing,
                         onOpenAddDialog = { showAddPlaylistDialog = true },
                         onSelectPlaylist = { selectActivePlaylist(it) },
-                        onRefreshPlaylist = { refreshPlaylist(it) },
+                        onRefreshPlaylist = { id ->
+                            playlists.find { it.id == id }?.let { refreshPlaylist(it) }
+                        },
                         onDeletePlaylist = { deletePlaylist(it) }
                     )
                 }
@@ -420,6 +769,7 @@ fun JoeMainScreen() {
 @Composable
 private fun JoeTopBar(
     activePlaylistName: String?,
+    isRefreshing: Boolean,
     onRefreshClick: () -> Unit
 ) {
     Row(
@@ -474,6 +824,7 @@ private fun JoeTopBar(
 
         IconButton(
             onClick = onRefreshClick,
+            enabled = !isRefreshing && activePlaylistName != null,
             modifier = Modifier
                 .clip(CircleShape)
                 .background(JoeColors.CardDark)
@@ -481,7 +832,7 @@ private fun JoeTopBar(
             Icon(
                 imageVector = Icons.Rounded.Refresh,
                 contentDescription = "Listeyi Güncelle",
-                tint = JoeColors.RedBright
+                tint = if (isRefreshing) JoeColors.TextSecondary else JoeColors.RedBright
             )
         }
     }
@@ -532,6 +883,7 @@ private fun EmptyMediaState(
     hasPlaylist: Boolean,
     playlistName: String?,
     sectionTitle: String,
+    isRefreshing: Boolean,
     onGoToPlaylists: () -> Unit,
     onRefreshActive: () -> Unit
 ) {
@@ -558,14 +910,14 @@ private fun EmptyMediaState(
                 modifier = Modifier.size(44.dp)
             )
             Text(
-                text = if (hasPlaylist) "$sectionTitle İçeriği Bekleniyor" else "Henüz Liste Eklenmedi",
+                text = if (hasPlaylist) "$sectionTitle İçeriği Bulunamadı" else "Henüz Liste Eklenmedi",
                 color = JoeColors.TextPrimary,
                 fontWeight = FontWeight.Bold,
                 fontSize = 17.sp
             )
             Text(
                 text = if (hasPlaylist) {
-                    "\"${playlistName ?: ""}\" listesi seçili. İçerikleri çekmek için listeyi güncelleyebilir veya Listeler sekmesinden kaynaklarını yönetebilirsin."
+                    "\"${playlistName ?: ""}\" listesi seçili. Sunucudan içerikleri çekmek için Listeyi Güncelle düğmesine dokun."
                 } else {
                     "$sectionTitle bölümünü kullanmak için Listeler sekmesinden Xtream Codes, M3U/M3U8 veya GitHub bağlantını ekle."
                 },
@@ -574,6 +926,7 @@ private fun EmptyMediaState(
             )
             Button(
                 onClick = if (hasPlaylist) onRefreshActive else onGoToPlaylists,
+                enabled = !isRefreshing,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = JoeColors.RedPrimary,
                     contentColor = JoeColors.TextPrimary
@@ -587,7 +940,11 @@ private fun EmptyMediaState(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = if (hasPlaylist) "Listeyi Güncelle" else "Listeler Bölümüne Git",
+                    text = when {
+                        isRefreshing -> "Güncelleniyor..."
+                        hasPlaylist -> "Listeyi Güncelle"
+                        else -> "Listeler Bölümüne Git"
+                    },
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -645,7 +1002,7 @@ private fun LiveContentSection(
     ) {
         item {
             Text(
-                text = "Canlı Kanallar",
+                text = "Canlı Kanallar (${channels.size})",
                 color = JoeColors.TextPrimary,
                 fontSize = 17.sp,
                 fontWeight = FontWeight.Bold,
@@ -813,6 +1170,7 @@ private fun MediaGridSection(
 private fun PlaylistManagementSection(
     playlists: List<JoePlaylist>,
     activePlaylistId: String?,
+    isRefreshing: Boolean,
     onOpenAddDialog: () -> Unit,
     onSelectPlaylist: (String) -> Unit,
     onRefreshPlaylist: (String) -> Unit,
@@ -943,12 +1301,13 @@ private fun PlaylistManagementSection(
                         Row {
                             IconButton(
                                 onClick = { onRefreshPlaylist(item.id) },
+                                enabled = !isRefreshing,
                                 modifier = Modifier.size(36.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Refresh,
                                     contentDescription = "Güncelle",
-                                    tint = JoeColors.RedBright
+                                    tint = if (isRefreshing) JoeColors.TextSecondary else JoeColors.RedBright
                                 )
                             }
                             IconButton(
