@@ -4066,7 +4066,8 @@ private fun parseHtmlStreams(
     defaultGroup: String,
     preferredKind: MediaKind
 ): List<ChannelEntry> {
-    val regex = Regex("""https?://[^\s"'<>)]+\.(?:m3u8|m3u|mp4|mkv|ts|mp3)(?:\?[^\s"'<>)]*)?""", RegexOption.IGNORE_CASE)
+    val pattern = "https?://[^\s"'<>)]+\.(?:m3u8|m3u|mp4|mkv|ts|mp3)(?:\?[^\s"'<>)]*)?"
+    val regex = Regex(pattern, RegexOption.IGNORE_CASE)
     val matches = regex.findAll(htmlText).map { it.value.trim() }.distinct().toList()
     val list = mutableListOf<ChannelEntry>()
     matches.forEachIndexed { idx, rawUrl ->
@@ -4335,9 +4336,9 @@ private fun parsePlaylistText(
 
     for (line in lines) {
         if (line.startsWith("#EXTINF:", ignoreCase = true)) {
-            val groupRegex = Regex("""group-title="([^"]*)"""", RegexOption.IGNORE_CASE).find(line)
+            val groupRegex = Regex("group-title="([^"]*)"", RegexOption.IGNORE_CASE).find(line)
             nextGroup = groupRegex?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() } ?: defaultGroup
-            val logoRegex = Regex("""tvg-logo="([^"]*)"""", RegexOption.IGNORE_CASE).find(line)
+            val logoRegex = Regex("tvg-logo="([^"]*)"", RegexOption.IGNORE_CASE).find(line)
             nextLogo = logoRegex?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
             val commaIdx = line.lastIndexOf(',')
             nextTitle = if (commaIdx != -1 && commaIdx + 1 < line.length) {
