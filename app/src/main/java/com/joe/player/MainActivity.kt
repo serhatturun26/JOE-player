@@ -76,15 +76,15 @@ import java.util.Locale
 import java.util.UUID
 
 object JoeColors {
-    val BackgroundDark = Color(0xFF0D0607)
-    val SurfaceDark = Color(0xFF1A0B0D)
-    val CardDark = Color(0xFF241013)
-    val RedPrimary = Color(0xFFE50914)
-    val RedBright = Color(0xFFFF1E2D)
-    val RedMuted = Color(0xFF5C1116)
-    val TextPrimary = Color(0xFFFFFFFF)
-    val TextSecondary = Color(0xFFB8A3A6)
-    val LiveBadge = Color(0xFFFF2A3B)
+    val BackgroundDark = Color(0xFF1D2E36)
+    val SurfaceDark = Color(0xFF152228)
+    val CardDark = Color(0xFF263B45)
+    val RedPrimary = Color(0xFF0088CC)
+    val RedBright = Color(0xFF29B6F6)
+    val RedMuted = Color(0xFF334E5C)
+    val TextPrimary = Color(0xFFF1F5F7)
+    val TextSecondary = Color(0xFF9EB3BD)
+    val LiveBadge = Color(0xFFE53935)
 }
 
 object JoeImageCache {
@@ -1714,7 +1714,7 @@ fun JoeVideoPlayerScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(JoeColors.SurfaceDark)
             .clickable { isOverlayVisible = !isOverlayVisible }
     ) {
         AndroidView(
@@ -1737,7 +1737,7 @@ fun JoeVideoPlayerScreen(
 
         if (isBuffering && playerError == null) {
             CircularProgressIndicator(
-                color = Color(0xFF0095FF),
+                color = JoeColors.RedBright,
                 modifier = Modifier.align(Alignment.Center)
             )
         } else if (isOverlayVisible && !isPlaying && playerError == null) {
@@ -1750,7 +1750,7 @@ fun JoeVideoPlayerScreen(
                 Icon(
                     imageVector = Icons.Rounded.Pause,
                     contentDescription = "Duraklatıldı",
-                    tint = Color.White,
+                    tint = JoeColors.TextPrimary,
                     modifier = Modifier.size(64.dp)
                 )
             }
@@ -1762,7 +1762,7 @@ fun JoeVideoPlayerScreen(
                     .align(Alignment.Center)
                     .padding(24.dp)
                     .clip(RoundedCornerShape(14.dp))
-                    .background(JoeColors.CardDark.copy(alpha = 0.95f))
+                    .background(JoeColors.CardDark.copy(alpha = 0.96f))
                     .border(1.dp, JoeColors.RedBright, RoundedCornerShape(14.dp))
                     .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -1803,9 +1803,9 @@ fun JoeVideoPlayerScreen(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.Black.copy(alpha = 0.72f),
+                                JoeColors.SurfaceDark.copy(alpha = 0.85f),
                                 Color.Transparent,
-                                Color.Black.copy(alpha = 0.85f)
+                                JoeColors.SurfaceDark.copy(alpha = 0.92f)
                             )
                         )
                     )
@@ -1826,19 +1826,19 @@ fun JoeVideoPlayerScreen(
                             onClick = { exitFullScreenAndClose() },
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
-                                .background(Color.Black.copy(alpha = 0.55f))
+                                .background(JoeColors.CardDark.copy(alpha = 0.85f))
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.ArrowBack,
                                 contentDescription = "Geri",
-                                tint = Color.White
+                                tint = JoeColors.TextPrimary
                             )
                         }
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
                                 text = currentChannel.title,
-                                color = Color.White,
+                                color = JoeColors.TextPrimary,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp,
                                 maxLines = 1,
@@ -1846,7 +1846,7 @@ fun JoeVideoPlayerScreen(
                             )
                             Text(
                                 text = currentChannel.subtitle,
-                                color = Color.White.copy(alpha = 0.75f),
+                                color = JoeColors.TextSecondary,
                                 fontSize = 11.sp,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
@@ -1870,19 +1870,19 @@ fun JoeVideoPlayerScreen(
                         ) {
                             Text(
                                 text = "Oto Kalite:",
-                                color = Color.White,
+                                color = JoeColors.TextPrimary,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium
                             )
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(3.dp))
-                                    .background(Color(0xFF0095FF))
+                                    .background(JoeColors.RedPrimary)
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
                                 Text(
                                     text = selectedQualityLabel,
-                                    color = Color.White,
+                                    color = JoeColors.TextPrimary,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -1896,12 +1896,12 @@ fun JoeVideoPlayerScreen(
                                     .width(108.dp)
                                     .clip(RoundedCornerShape(4.dp))
                                     .background(
-                                        if (active) Color(0xFF0095FF)
-                                        else Color.Black.copy(alpha = 0.65f)
+                                        if (active) JoeColors.RedPrimary
+                                        else JoeColors.CardDark.copy(alpha = 0.85f)
                                     )
                                     .border(
                                         width = 1.dp,
-                                        color = if (active) Color(0xFF0095FF) else Color.White.copy(alpha = 0.35f),
+                                        color = if (active) JoeColors.RedBright else JoeColors.RedMuted,
                                         shape = RoundedCornerShape(4.dp)
                                     )
                                     .clickable { selectedTrackOption = option }
@@ -1910,7 +1910,7 @@ fun JoeVideoPlayerScreen(
                             ) {
                                 Text(
                                     text = option,
-                                    color = Color.White,
+                                    color = JoeColors.TextPrimary,
                                     fontSize = 12.sp,
                                     fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
                                     maxLines = 1
@@ -1985,9 +1985,9 @@ fun JoeVideoPlayerScreen(
                             isSeeking = false
                         },
                         colors = SliderDefaults.colors(
-                            thumbColor = Color(0xFF0095FF),
-                            activeTrackColor = Color(0xFF0095FF),
-                            inactiveTrackColor = Color.White.copy(alpha = 0.35f)
+                            thumbColor = JoeColors.RedBright,
+                            activeTrackColor = JoeColors.RedBright,
+                            inactiveTrackColor = JoeColors.TextSecondary.copy(alpha = 0.35f)
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2006,7 +2006,7 @@ fun JoeVideoPlayerScreen(
                             Icon(
                                 imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                 contentDescription = "Oynat/Duraklat",
-                                tint = Color.White,
+                                tint = JoeColors.TextPrimary,
                                 modifier = Modifier
                                     .size(24.dp)
                                     .clickable {
@@ -2016,7 +2016,7 @@ fun JoeVideoPlayerScreen(
                             Icon(
                                 imageVector = Icons.Rounded.VolumeUp,
                                 contentDescription = "Ses",
-                                tint = Color.White,
+                                tint = JoeColors.TextPrimary,
                                 modifier = Modifier
                                     .size(22.dp)
                                     .clickable {
@@ -2025,7 +2025,7 @@ fun JoeVideoPlayerScreen(
                             )
                             Text(
                                 text = "${formatDuration(currentPosMs)} / ${formatDuration(durationMs)}",
-                                color = Color.White,
+                                color = JoeColors.TextPrimary,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium
                             )
@@ -2038,7 +2038,7 @@ fun JoeVideoPlayerScreen(
                             Icon(
                                 imageVector = Icons.Rounded.Replay10,
                                 contentDescription = "10sn Geri",
-                                tint = Color.White,
+                                tint = JoeColors.TextPrimary,
                                 modifier = Modifier
                                     .size(22.dp)
                                     .clickable {
@@ -2048,7 +2048,7 @@ fun JoeVideoPlayerScreen(
                             Icon(
                                 imageVector = Icons.Rounded.Forward10,
                                 contentDescription = "10sn İleri",
-                                tint = Color.White,
+                                tint = JoeColors.TextPrimary,
                                 modifier = Modifier
                                     .size(22.dp)
                                     .clickable {
@@ -2060,7 +2060,7 @@ fun JoeVideoPlayerScreen(
                             Icon(
                                 imageVector = Icons.Rounded.Headphones,
                                 contentDescription = "Ses Modu",
-                                tint = Color.White,
+                                tint = JoeColors.TextPrimary,
                                 modifier = Modifier
                                     .size(22.dp)
                                     .clickable {
@@ -2071,7 +2071,7 @@ fun JoeVideoPlayerScreen(
                             Icon(
                                 imageVector = Icons.Rounded.ClosedCaption,
                                 contentDescription = "Altyazı",
-                                tint = if (selectedTrackOption.contains("Altyazı")) Color(0xFF0095FF) else Color.White,
+                                tint = if (selectedTrackOption.contains("Altyazı")) JoeColors.RedBright else JoeColors.TextPrimary,
                                 modifier = Modifier
                                     .size(22.dp)
                                     .clickable {
@@ -2081,7 +2081,7 @@ fun JoeVideoPlayerScreen(
                             Icon(
                                 imageVector = Icons.Rounded.Settings,
                                 contentDescription = "Hız (${speedOptions[playbackSpeedIndex].second})",
-                                tint = Color.White,
+                                tint = JoeColors.TextPrimary,
                                 modifier = Modifier
                                     .size(22.dp)
                                     .clickable {
@@ -2091,7 +2091,7 @@ fun JoeVideoPlayerScreen(
                             Icon(
                                 imageVector = Icons.Rounded.PictureInPictureAlt,
                                 contentDescription = "Oran (${resizeModes[resizeModeIndex].second})",
-                                tint = Color.White,
+                                tint = JoeColors.TextPrimary,
                                 modifier = Modifier
                                     .size(22.dp)
                                     .clickable {
@@ -2101,7 +2101,7 @@ fun JoeVideoPlayerScreen(
                             Icon(
                                 imageVector = if (isFullLandscape) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
                                 contentDescription = "Tam Ekran",
-                                tint = Color.White,
+                                tint = JoeColors.TextPrimary,
                                 modifier = Modifier
                                     .size(22.dp)
                                     .clickable { isFullLandscape = !isFullLandscape }
@@ -2138,7 +2138,7 @@ fun JoeVideoPlayerScreen(
                                 Icon(
                                     imageVector = Icons.Rounded.Lightbulb,
                                     contentDescription = "Ekran Açık",
-                                    tint = if (keepScreenOn) JoeColors.RedBright else Color.White
+                                    tint = if (keepScreenOn) JoeColors.RedBright else JoeColors.TextPrimary
                                 )
                             }
                         }
@@ -2162,7 +2162,7 @@ fun JoeVideoPlayerScreen(
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
                     .background(JoeColors.SurfaceDark.copy(alpha = 0.96f))
-                    .border(1.dp, Color(0xFF0095FF).copy(alpha = 0.6f), RoundedCornerShape(12.dp)),
+                    .border(1.dp, JoeColors.RedBright.copy(alpha = 0.6f), RoundedCornerShape(12.dp)),
                 contentPadding = PaddingValues(8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
@@ -2172,7 +2172,7 @@ fun JoeVideoPlayerScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(8.dp))
-                            .background(if (isCurrent) Color(0xFF0095FF).copy(alpha = 0.35f) else JoeColors.CardDark)
+                            .background(if (isCurrent) JoeColors.RedPrimary.copy(alpha = 0.35f) else JoeColors.CardDark)
                             .clickable {
                                 lastScrolledChannelId = item.id
                                 onSelectChannel(item)
@@ -2183,7 +2183,7 @@ fun JoeVideoPlayerScreen(
                     ) {
                         Text(
                             text = item.title,
-                            color = if (isCurrent) Color(0xFF66C2FF) else JoeColors.TextPrimary,
+                            color = if (isCurrent) JoeColors.RedBright else JoeColors.TextPrimary,
                             fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
                             fontSize = 13.sp,
                             maxLines = 1,
