@@ -799,31 +799,13 @@ fun JoeMainScreen() {
         mutableStateOf(if (playlists.isEmpty()) JoeTab.PLAYLISTS else JoeTab.LIVE)
     }
     var selectedCategory by remember { mutableStateOf("Tümü") }
+    var categorySearchQuery by remember { mutableStateOf("") }
     var detailTarget by remember { mutableStateOf<JoeChannelItem?>(null) }
     var activePlayerChannel by remember { mutableStateOf<JoeChannelItem?>(null) }
     var activePlayableUrl by remember { mutableStateOf("") }
     var showAddPlaylistDialog by remember { mutableStateOf(false) }
 
-    val liveChannels by remember(allItems, selectedCategory) {
-        derivedStateOf {
-            val base = allItems.filter { it.category == MediaCategory.LIVE }
-            if (selectedCategory == "Tümü") base else base.filter { it.group.equals(selectedCategory, ignoreCase = true) }
-        }
-    }
-    val movieItems by remember(allItems, selectedCategory) {
-        derivedStateOf {
-            val base = allItems.filter { it.category == MediaCategory.MOVIE }
-            if (selectedCategory == "Tümü") base else base.filter { it.group.equals(selectedCategory, ignoreCase = true) }
-        }
-    }
-    val seriesItems by remember(allItems, selectedCategory) {
-        derivedStateOf {
-            val base = allItems.filter { it.category == MediaCategory.SERIES }
-            if (selectedCategory == "Tümü") base else base.filter { it.group.equals(selectedCategory, ignoreCase = true) }
-        }
-    }
-
-    val dynamicCategories by remember(allItems, selectedTab) {
+    val allTabCategories by remember(allItems, selectedTab) {
         derivedStateOf {
             val tabItems = when (selectedTab) {
                 JoeTab.LIVE -> allItems.filter { it.category == MediaCategory.LIVE }
@@ -831,8 +813,82 @@ fun JoeMainScreen() {
                 JoeTab.SERIES -> allItems.filter { it.category == MediaCategory.SERIES }
                 JoeTab.PLAYLISTS -> emptyList()
             }
-            val groups = tabItems.map { it.group }.filter { it.isNotBlank() }.distinct().take(25)
+            val groups = tabItems.map { it.group }.filter { it.isNotBlank() }.distinct()
             listOf("Tümü") + groups
+        }
+    }
+
+    val filteredCategories by remember(allTabCategories, categorySearchQuery) {
+        derivedStateOf {
+            val q = categorySearchQuery.trim()
+            if (q.isEmpty()) {
+                allTabCategories
+            } else {
+                val matched = allTabCategories.filter {
+                    it == "Tümü" || it.contains(q, ignoreCase = true)
+                }
+                if (matched.isEmpty()) listOf("Tümü") else matched
+            }
+        }
+    }
+
+    val liveChannels by remember(allItems, selectedCategory, categorySearchQuery) {
+        derivedStateOf {
+            val q = categorySearchQuery.trim()
+            val matchingGroups = if (q.isEmpty()) emptySet() else {
+                allItems.asSequence()
+                    .filter { it.category == MediaCategory.LIVE && it.group.contains(q, ignoreCase = true) }
+                    .map { it.group }
+                    .toSet()
+            }
+            allItems.filter { item ->
+                if (item.category != MediaCategory.LIVE) return@filter false
+                val catOk = selectedCategory == "Tümü" || item.group.equals(selectedCategory, ignoreCase = true)
+                val searchOk = q.isEmpty() ||
+                    item.group in matchingGroups ||
+                    item.title.contains(q, ignoreCase = true)
+                catOk && searchOk
+            }
+        }
+    }
+
+    val movieItems by remember(allItems, selectedCategory, categorySearchQuery) {
+        derivedStateOf {
+            val q = categorySearchQuery.trim()
+            val matchingGroups = if (q.isEmpty()) emptySet() else {
+                allItems.asSequence()
+                    .filter { it.category == MediaCategory.MOVIE && it.group.contains(q, ignoreCase = true) }
+                    .map { it.group }
+                    .toSet()
+            }
+            allItems.filter { item ->
+                if (item.category != MediaCategory.MOVIE) return@filter false
+                val catOk = selectedCategory == "Tümü" || item.group.equals(selectedCategory, ignoreCase = true)
+                val searchOk = q.isEmpty() ||
+                    item.group in matchingGroups ||
+                    item.title.contains(q, ignoreCase = true)
+                catOk && searchOk
+            }
+        }
+    }
+
+    val seriesItems by remember(allItems, selectedCategory, categorySearchQuery) {
+        derivedStateOf {
+            val q = categorySearchQuery.trim()
+            val matchingGroups = if (q.isEmpty()) emptySet() else {
+                allItems.asSequence()
+                    .filter { it.category == MediaCategory.SERIES && it.group.contains(q, ignoreCase = true) }
+                    .map { it.group }
+                    .toSet()
+            }
+            allItems.filter { item ->
+                if (item.category != MediaCategory.SERIES) return@filter false
+                val catOk = selectedCategory == "Tümü" || item.group.equals(selectedCategory, ignoreCase = true)
+                val searchOk = q.isEmpty() ||
+                    item.group in matchingGroups ||
+                    item.title.contains(q, ignoreCase = true)
+                catOk && searchOk
+            }
         }
     }
 
@@ -865,6 +921,7 @@ fun JoeMainScreen() {
                 if (activePlaylist?.id == playlist.id || activePlaylistId == playlist.id) {
                     allItems = fetchedItems
                     selectedCategory = "Tümü"
+                    categorySearchQuery = ""
                 }
                 statusMessage = "${fetchedItems.size} içerik yüklendi."
                 if (switchToLiveOnSuccess) {
@@ -902,6 +959,7 @@ fun JoeMainScreen() {
         activePlaylistId = id
         JoePlaylistStorage.setActivePlaylistId(context, id)
         selectedCategory = "Tümü"
+        categorySearchQuery = ""
         coroutineScope.launch {
             val cached = JoePlaylistStorage.loadCachedItems(context, id)
             allItems = cached
@@ -942,6 +1000,7 @@ fun JoeMainScreen() {
                 onSelectTab = {
                     selectedTab = it
                     selectedCategory = "Tümü"
+                    categorySearchQuery = ""
                 }
             )
         }
@@ -993,10 +1052,20 @@ fun JoeMainScreen() {
                 )
             }
 
-            if (selectedTab != JoeTab.PLAYLISTS && activePlaylist != null && dynamicCategories.size > 1) {
-                CategoryFilterRow(
-                    categories = dynamicCategories,
+            if (selectedTab != JoeTab.PLAYLISTS && activePlaylist != null && allTabCategories.size > 1) {
+                CategorySearchAndFilterSection(
+                    categories = filteredCategories,
                     selectedCategory = selectedCategory,
+                    searchQuery = categorySearchQuery,
+                    totalCategoryCount = allTabCategories.size - 1,
+                    onSearchQueryChange = { query ->
+                        categorySearchQuery = query
+                        if (selectedCategory != "Tümü" && query.isNotBlank() &&
+                            !selectedCategory.contains(query.trim(), ignoreCase = true)
+                        ) {
+                            selectedCategory = "Tümü"
+                        }
+                    },
                     onSelectCategory = { selectedCategory = it }
                 )
             }
@@ -1102,6 +1171,75 @@ fun JoeMainScreen() {
                 }
             )
         }
+    }
+}
+
+@Composable
+private fun CategorySearchAndFilterSection(
+    categories: List<String>,
+    selectedCategory: String,
+    searchQuery: String,
+    totalCategoryCount: Int,
+    onSearchQueryChange: (String) -> Unit,
+    onSelectCategory: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = onSearchQueryChange,
+            singleLine = true,
+            placeholder = {
+                Text(
+                    text = "Kategori veya içerik ara ($totalCategoryCount kategori)...",
+                    color = JoeColors.TextSecondary,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Rounded.Search,
+                    contentDescription = "Ara",
+                    tint = JoeColors.RedBright
+                )
+            },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { onSearchQueryChange("") }) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Temizle",
+                            tint = JoeColors.TextSecondary
+                        )
+                    }
+                }
+            },
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = JoeColors.CardDark,
+                unfocusedContainerColor = JoeColors.CardDark,
+                focusedBorderColor = JoeColors.RedBright,
+                unfocusedBorderColor = JoeColors.RedMuted,
+                focusedTextColor = JoeColors.TextPrimary,
+                unfocusedTextColor = JoeColors.TextPrimary,
+                cursorColor = JoeColors.RedBright
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+        )
+
+        CategoryFilterRow(
+            categories = categories,
+            selectedCategory = selectedCategory,
+            onSelectCategory = onSelectCategory
+        )
     }
 }
 
@@ -2008,7 +2146,7 @@ private fun CategoryFilterRow(
     LazyRow(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp),
+            .padding(vertical = 4.dp),
         contentPadding = PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
