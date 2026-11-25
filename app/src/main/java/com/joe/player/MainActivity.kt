@@ -3,7 +3,10 @@ package com.joe.player
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.util.LruCache
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -14,6 +17,7 @@ import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,8 +26,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -33,7 +39,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -76,6 +85,78 @@ object JoeColors {
     val LiveBadge = Color(0xFFFF2A3B)
 }
 
+object JoeImageCache {
+    private val cache = object : LruCache<String, ImageBitmap>(120) {}
+
+    suspend fun load(urlString: String): ImageBitmap? {
+        if (urlString.isBlank()) return null
+        cache.get(urlString)?.let { return it }
+        return withContext(Dispatchers.IO) {
+            try {
+                val conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "JOE-Player/1.0")
+                }
+                if (conn.responseCode in 200..299) {
+                    val options = BitmapFactory.Options().apply {
+                        inPreferredConfig = Bitmap.Config.RGB_565
+                    }
+                    val bmp = conn.inputStream.use { BitmapFactory.decodeStream(it, null, options) }
+                    val img = bmp?.asImageBitmap()
+                    if (img != null) {
+                        cache.put(urlString, img)
+                    }
+                    img
+                } else {
+                    null
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+    }
+}
+
+@Composable
+fun JoeNetworkPoster(
+    url: String,
+    modifier: Modifier = Modifier,
+    fallbackIcon: ImageVector = Icons.Rounded.PlayCircleFilled
+) {
+    var imageBitmap by remember(url) { mutableStateOf<ImageBitmap?>(null) }
+
+    LaunchedEffect(url) {
+        imageBitmap = JoeImageCache.load(url)
+    }
+
+    Box(
+        modifier = modifier.background(
+            Brush.verticalGradient(
+                listOf(JoeColors.RedMuted, JoeColors.SurfaceDark)
+            )
+        ),
+        contentAlignment = Alignment.Center
+    ) {
+        if (imageBitmap != null) {
+            Image(
+                bitmap = imageBitmap!!,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Icon(
+                imageVector = fallbackIcon,
+                contentDescription = null,
+                tint = JoeColors.RedBright,
+                modifier = Modifier.size(40.dp)
+            )
+        }
+    }
+}
+
 enum class PlaylistType(val label: String) {
     XTREAM("Xtream Codes"),
     M3U("M3U / M3U8"),
@@ -116,6 +197,9 @@ data class JoeChannelItem(
     val year: String = "",
     val rating: String = "",
     val genre: String = "",
+    val duration: String = "",
+    val director: String = "",
+    val cast: String = "",
     val seriesInfoUrl: String = ""
 )
 
@@ -195,6 +279,9 @@ object JoePlaylistStorage {
                 put("year", item.year)
                 put("rating", item.rating)
                 put("genre", item.genre)
+                put("duration", item.duration)
+                put("director", item.director)
+                put("cast", item.cast)
                 put("seriesInfoUrl", item.seriesInfoUrl)
             }
             array.put(obj)
@@ -229,6 +316,9 @@ object JoePlaylistStorage {
                         year = obj.optString("year", ""),
                         rating = obj.optString("rating", ""),
                         genre = obj.optString("genre", ""),
+                        duration = obj.optString("duration", ""),
+                        director = obj.optString("director", ""),
+                        cast = obj.optString("cast", ""),
                         seriesInfoUrl = obj.optString("seriesInfoUrl", "")
                     )
                 )
@@ -308,6 +398,23 @@ object JoePlaylistFetcher {
         return if (meta.isEmpty()) group else meta.joinToString(" • ")
     }
 
+    private fun fetchCategoryMap(apiBase: String): Map<String, String> {
+        val map = mutableMapOf<String, String>()
+        runCatching {
+            val text = downloadText(apiBase)
+            val arr = JSONArray(text)
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val id = obj.optString("category_id", "")
+                val name = obj.optString("category_name", "")
+                if (id.isNotEmpty() && name.isNotEmpty()) {
+                    map[id] = name
+                }
+            }
+        }
+        return map
+    }
+
     private fun fetchM3u(rawUrl: String): List<JoeChannelItem> {
         val url = normalizeBaseUrl(rawUrl)
         val content = downloadText(url)
@@ -375,6 +482,10 @@ object JoePlaylistFetcher {
         val pass = URLEncoder.encode(playlist.password.trim(), "UTF-8")
         val items = mutableListOf<JoeChannelItem>()
 
+        val liveCategories = fetchCategoryMap("$baseUrl/player_api.php?username=$user&password=$pass&action=get_live_categories")
+        val vodCategories = fetchCategoryMap("$baseUrl/player_api.php?username=$user&password=$pass&action=get_vod_categories")
+        val seriesCategories = fetchCategoryMap("$baseUrl/player_api.php?username=$user&password=$pass&action=get_series_categories")
+
         runCatching {
             val liveJson = downloadText("$baseUrl/player_api.php?username=$user&password=$pass&action=get_live_streams")
             val array = JSONArray(liveJson)
@@ -382,7 +493,10 @@ object JoePlaylistFetcher {
                 val obj = array.getJSONObject(i)
                 val streamId = obj.optString("stream_id", "")
                 val name = obj.optString("name", "Kanal ${i + 1}")
-                val categoryName = obj.optString("category_name", "Canlı TV").ifBlank { "Canlı TV" }
+                val catId = obj.optString("category_id", "")
+                val categoryName = obj.optString("category_name", "")
+                    .ifBlank { liveCategories[catId].orEmpty() }
+                    .ifBlank { "Canlı TV" }
                 val icon = obj.optString("stream_icon", "")
                 if (streamId.isNotEmpty()) {
                     items.add(
@@ -409,7 +523,10 @@ object JoePlaylistFetcher {
                 val streamId = obj.optString("stream_id", "")
                 val name = obj.optString("name", "Film ${i + 1}")
                 val ext = obj.optString("container_extension", "mp4").ifBlank { "mp4" }
-                val categoryName = obj.optString("category_name", "Filmler").ifBlank { "Filmler" }
+                val catId = obj.optString("category_id", "")
+                val categoryName = obj.optString("category_name", "")
+                    .ifBlank { vodCategories[catId].orEmpty() }
+                    .ifBlank { "Filmler" }
                 val poster = obj.optString("stream_icon", obj.optString("cover", ""))
                 val plot = obj.optString("plot", obj.optString("description", ""))
                 val year = obj.optString("releaseDate", obj.optString("year", ""))
@@ -444,7 +561,10 @@ object JoePlaylistFetcher {
                 val obj = array.getJSONObject(i)
                 val seriesId = obj.optString("series_id", "")
                 val name = obj.optString("name", "Dizi ${i + 1}")
-                val categoryName = obj.optString("category_name", "Diziler").ifBlank { "Diziler" }
+                val catId = obj.optString("category_id", "")
+                val categoryName = obj.optString("category_name", "")
+                    .ifBlank { seriesCategories[catId].orEmpty() }
+                    .ifBlank { "Diziler" }
                 val poster = obj.optString("cover", obj.optString("stream_icon", ""))
                 val plot = obj.optString("plot", obj.optString("description", ""))
                 val year = obj.optString("releaseDate", obj.optString("year", ""))
@@ -481,6 +601,50 @@ object JoePlaylistFetcher {
         return items
     }
 
+    suspend fun fetchVodDetails(
+        item: JoeChannelItem,
+        playlist: JoePlaylist?
+    ): JoeChannelItem = withContext(Dispatchers.IO) {
+        if (playlist == null || playlist.type != PlaylistType.XTREAM || !item.id.startsWith("vod_")) {
+            return@withContext item
+        }
+        val vodId = item.id.removePrefix("vod_")
+        if (vodId.isBlank()) return@withContext item
+
+        try {
+            val baseUrl = normalizeBaseUrl(playlist.serverUrl)
+            val user = URLEncoder.encode(playlist.username.trim(), "UTF-8")
+            val pass = URLEncoder.encode(playlist.password.trim(), "UTF-8")
+            val infoText = downloadText("$baseUrl/player_api.php?username=$user&password=$pass&action=get_vod_info&vod_id=$vodId")
+            val root = JSONObject(infoText)
+            val infoObj = root.optJSONObject("info") ?: return@withContext item
+
+            val plot = infoObj.optString("plot", infoObj.optString("description", "")).ifBlank { item.plot }
+            val genre = infoObj.optString("genre", "").ifBlank { item.genre }
+            val year = infoObj.optString("releasedate", infoObj.optString("releaseDate", ""))
+                .takeIf { it.isNotBlank() }?.take(4) ?: item.year
+            val rating = infoObj.optString("rating", "").ifBlank { item.rating }
+            val duration = infoObj.optString("duration", "")
+            val director = infoObj.optString("director", "")
+            val cast = infoObj.optString("cast", infoObj.optString("actors", ""))
+            val poster = infoObj.optString("movie_image", infoObj.optString("cover_big", "")).ifBlank { item.posterUrl }
+
+            item.copy(
+                plot = plot,
+                genre = genre,
+                year = year,
+                rating = rating,
+                duration = duration,
+                director = director,
+                cast = cast,
+                posterUrl = poster,
+                subtitle = buildSubtitle(item.group, year, rating, genre)
+            )
+        } catch (_: Exception) {
+            item
+        }
+    }
+
     suspend fun fetchSeriesDetailsAndEpisodes(
         item: JoeChannelItem,
         playlist: JoePlaylist?
@@ -504,6 +668,8 @@ object JoePlaylistFetcher {
             val updatedYear = infoObj?.optString("releaseDate", "")?.takeIf { it.isNotBlank() }?.take(4) ?: item.year
             val updatedRating = infoObj?.optString("rating", "")?.takeIf { it.isNotBlank() } ?: item.rating
             val updatedGenre = infoObj?.optString("genre", "")?.takeIf { it.isNotBlank() } ?: item.genre
+            val updatedDirector = infoObj?.optString("director", "")?.takeIf { it.isNotBlank() } ?: item.director
+            val updatedCast = infoObj?.optString("cast", "")?.takeIf { it.isNotBlank() } ?: item.cast
             val updatedPoster = infoObj?.optString("cover", "")?.takeIf { it.isNotBlank() } ?: item.posterUrl
 
             val enrichedItem = item.copy(
@@ -511,6 +677,8 @@ object JoePlaylistFetcher {
                 year = updatedYear,
                 rating = updatedRating,
                 genre = updatedGenre,
+                director = updatedDirector,
+                cast = updatedCast,
                 posterUrl = updatedPoster,
                 subtitle = buildSubtitle(item.group, updatedYear, updatedRating, updatedGenre)
             )
@@ -638,7 +806,7 @@ fun JoeMainScreen() {
             JoeTab.SERIES -> allItems.filter { it.category == MediaCategory.SERIES }
             JoeTab.PLAYLISTS -> emptyList()
         }
-        val groups = tabItems.map { it.group }.filter { it.isNotBlank() }.distinct().take(20)
+        val groups = tabItems.map { it.group }.filter { it.isNotBlank() }.distinct().take(25)
         listOf("Tümü") + groups
     }
 
@@ -918,16 +1086,18 @@ private fun MediaDetailDialog(
 ) {
     var detailItem by remember(item.id) { mutableStateOf(item) }
     var episodes by remember(item.id) { mutableStateOf<List<JoeEpisodeItem>>(emptyList()) }
-    var isLoadingEpisodes by remember(item.id) { mutableStateOf(item.category == MediaCategory.SERIES) }
+    var isLoadingDetails by remember(item.id) { mutableStateOf(true) }
 
     LaunchedEffect(item.id) {
+        isLoadingDetails = true
         if (item.category == MediaCategory.SERIES) {
-            isLoadingEpisodes = true
             val (enriched, epList) = JoePlaylistFetcher.fetchSeriesDetailsAndEpisodes(item, playlist)
             detailItem = enriched
             episodes = epList
-            isLoadingEpisodes = false
+        } else if (item.category == MediaCategory.MOVIE) {
+            detailItem = JoePlaylistFetcher.fetchVodDetails(item, playlist)
         }
+        isLoadingDetails = false
     }
 
     AlertDialog(
@@ -936,94 +1106,156 @@ private fun MediaDetailDialog(
         titleContentColor = JoeColors.TextPrimary,
         textContentColor = JoeColors.TextSecondary,
         title = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = detailItem.title,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    color = JoeColors.TextPrimary
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                JoeNetworkPoster(
+                    url = detailItem.posterUrl,
+                    modifier = Modifier
+                        .width(74.dp)
+                        .height(106.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(8.dp))
                 )
-                val badges = listOfNotNull(
-                    detailItem.year.takeIf { it.isNotBlank() },
-                    detailItem.rating.takeIf { it.isNotBlank() && it != "0" && it != "0.0" }?.let { "★ $it" },
-                    detailItem.genre.takeIf { it.isNotBlank() } ?: detailItem.group.takeIf { it.isNotBlank() }
-                )
-                if (badges.isNotEmpty()) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Text(
-                        text = badges.joinToString(" • "),
-                        color = JoeColors.RedBright,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
+                        text = detailItem.title,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp,
+                        color = JoeColors.TextPrimary,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
                     )
+                    val badges = listOfNotNull(
+                        detailItem.year.takeIf { it.isNotBlank() },
+                        detailItem.rating.takeIf { it.isNotBlank() && it != "0" && it != "0.0" }?.let { "★ $it" },
+                        detailItem.duration.takeIf { it.isNotBlank() }
+                    )
+                    if (badges.isNotEmpty()) {
+                        Text(
+                            text = badges.joinToString(" • "),
+                            color = JoeColors.RedBright,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    val genreText = detailItem.genre.ifBlank { detailItem.group }
+                    if (genreText.isNotBlank()) {
+                        Text(
+                            text = genreText,
+                            color = JoeColors.TextSecondary,
+                            fontSize = 11.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (isLoadingDetails) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CircularProgressIndicator(
+                            color = JoeColors.RedBright,
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Text(
+                            text = "İçerik bilgileri yükleniyor...",
+                            color = JoeColors.TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+
                 Text(
-                    text = detailItem.plot.ifBlank { "Bu içerik için açıklama bilgisi bulunmuyor." },
-                    color = JoeColors.TextSecondary,
-                    fontSize = 13.sp
+                    text = detailItem.plot.ifBlank {
+                        if (isLoadingDetails) "" else "Sunucu bu içerik için özet metni sağlamıyor."
+                    },
+                    color = JoeColors.TextPrimary.copy(alpha = 0.9f),
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp
                 )
 
-                if (detailItem.category == MediaCategory.SERIES) {
+                if (detailItem.director.isNotBlank()) {
                     Text(
-                        text = "Bölümler",
+                        text = "Yönetmen: ${detailItem.director}",
+                        color = JoeColors.TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+
+                if (detailItem.cast.isNotBlank()) {
+                    Text(
+                        text = "Oyuncular: ${detailItem.cast}",
+                        color = JoeColors.TextSecondary,
+                        fontSize = 12.sp,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                if (detailItem.category == MediaCategory.SERIES && !isLoadingDetails) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Bölümler (${episodes.size})",
                         color = JoeColors.TextPrimary,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp
                     )
-                    if (isLoadingEpisodes) {
-                        CircularProgressIndicator(
-                            color = JoeColors.RedBright,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    } else if (episodes.isEmpty()) {
+                    if (episodes.isEmpty()) {
                         Text(
                             text = "Bölüm listesi alınamadı.",
                             color = JoeColors.TextSecondary,
                             fontSize = 12.sp
                         )
                     } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 180.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            items(episodes, key = { it.id + it.title }) { ep ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(JoeColors.SurfaceDark)
-                                        .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            val playMeta = detailItem.copy(
-                                                title = "${detailItem.title} - ${ep.title}",
-                                                subtitle = detailItem.group
-                                            )
-                                            onPlayUrl(playMeta, ep.streamUrl)
-                                        }
-                                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        text = ep.title,
-                                        color = JoeColors.TextPrimary,
-                                        fontSize = 12.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Icon(
-                                        imageVector = Icons.Rounded.PlayArrow,
-                                        contentDescription = "Bölümü Oynat",
-                                        tint = JoeColors.RedBright,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
+                        episodes.forEach { ep ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(JoeColors.SurfaceDark)
+                                    .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        val playMeta = detailItem.copy(
+                                            title = "${detailItem.title} - ${ep.title}",
+                                            subtitle = detailItem.group
+                                        )
+                                        onPlayUrl(playMeta, ep.streamUrl)
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = ep.title,
+                                    color = JoeColors.TextPrimary,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Icon(
+                                    imageVector = Icons.Rounded.PlayArrow,
+                                    contentDescription = "Bölümü Oynat",
+                                    tint = JoeColors.RedBright,
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
                     }
@@ -1907,24 +2139,12 @@ private fun MediaGridSection(
                             .border(1.dp, JoeColors.RedMuted.copy(alpha = 0.6f), RoundedCornerShape(14.dp))
                             .clickable { onItemClick(item) }
                     ) {
-                        Box(
+                        JoeNetworkPoster(
+                            url = item.posterUrl,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(115.dp)
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(JoeColors.RedMuted, JoeColors.SurfaceDark)
-                                    )
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.PlayCircleFilled,
-                                contentDescription = null,
-                                tint = JoeColors.RedBright,
-                                modifier = Modifier.size(42.dp)
-                            )
-                        }
+                                .height(165.dp)
+                        )
                         Column(modifier = Modifier.padding(10.dp)) {
                             Text(
                                 text = item.title,
