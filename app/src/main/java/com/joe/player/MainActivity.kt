@@ -1201,7 +1201,7 @@ fun JoeMainScreen() {
                             item = playMeta,
                             url = ep.streamUrl,
                             episodes = epList,
-                            currentEpisodeIndex = epIndex
+                            episodeIndex = epIndex
                         )
                     }
                 }
