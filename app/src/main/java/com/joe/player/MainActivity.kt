@@ -96,6 +96,13 @@ enum class MediaCategory {
     LIVE, MOVIE, SERIES
 }
 
+data class JoeEpisodeItem(
+    val id: String,
+    val title: String,
+    val seasonNumber: String,
+    val streamUrl: String
+)
+
 data class JoeChannelItem(
     val id: String,
     val title: String,
@@ -103,7 +110,13 @@ data class JoeChannelItem(
     val group: String = "Genel",
     val streamUrl: String = "",
     val category: MediaCategory = MediaCategory.LIVE,
-    val isLive: Boolean = true
+    val isLive: Boolean = true,
+    val posterUrl: String = "",
+    val plot: String = "",
+    val year: String = "",
+    val rating: String = "",
+    val genre: String = "",
+    val seriesInfoUrl: String = ""
 )
 
 enum class JoeTab(val label: String, val icon: ImageVector) {
@@ -177,6 +190,12 @@ object JoePlaylistStorage {
                 put("streamUrl", item.streamUrl)
                 put("category", item.category.name)
                 put("isLive", item.isLive)
+                put("posterUrl", item.posterUrl)
+                put("plot", item.plot)
+                put("year", item.year)
+                put("rating", item.rating)
+                put("genre", item.genre)
+                put("seriesInfoUrl", item.seriesInfoUrl)
             }
             array.put(obj)
         }
@@ -204,7 +223,13 @@ object JoePlaylistStorage {
                         group = obj.optString("group", "Genel"),
                         streamUrl = obj.optString("streamUrl", ""),
                         category = category,
-                        isLive = obj.optBoolean("isLive", true)
+                        isLive = obj.optBoolean("isLive", true),
+                        posterUrl = obj.optString("posterUrl", ""),
+                        plot = obj.optString("plot", ""),
+                        year = obj.optString("year", ""),
+                        rating = obj.optString("rating", ""),
+                        genre = obj.optString("genre", ""),
+                        seriesInfoUrl = obj.optString("seriesInfoUrl", "")
                     )
                 )
             }
@@ -274,6 +299,15 @@ object JoePlaylistFetcher {
         return conn.inputStream.bufferedReader().use { it.readText() }
     }
 
+    private fun buildSubtitle(group: String, year: String, rating: String, genre: String): String {
+        val meta = listOfNotNull(
+            year.takeIf { it.isNotBlank() },
+            rating.takeIf { it.isNotBlank() && it != "0" && it != "0.0" }?.let { "★ $it" },
+            genre.takeIf { it.isNotBlank() } ?: group.takeIf { it.isNotBlank() }
+        )
+        return if (meta.isEmpty()) group else meta.joinToString(" • ")
+    }
+
     private fun fetchM3u(rawUrl: String): List<JoeChannelItem> {
         val url = normalizeBaseUrl(rawUrl)
         val content = downloadText(url)
@@ -282,6 +316,8 @@ object JoePlaylistFetcher {
 
         var currentTitle = ""
         var currentGroup = "Genel"
+        var currentLogo = ""
+        var currentYear = ""
 
         for (rawLine in lines) {
             val line = rawLine.trim()
@@ -290,12 +326,19 @@ object JoePlaylistFetcher {
             if (line.startsWith("#EXTINF:", ignoreCase = true)) {
                 val groupMatch = Regex("""group-title="([^"]*)"""", RegexOption.IGNORE_CASE).find(line)
                 currentGroup = groupMatch?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() } ?: "Genel"
+
+                val logoMatch = Regex("""tvg-logo="([^"]*)"""", RegexOption.IGNORE_CASE).find(line)
+                currentLogo = logoMatch?.groupValues?.getOrNull(1)?.trim().orEmpty()
+
                 val commaIndex = line.lastIndexOf(',')
                 currentTitle = if (commaIndex != -1 && commaIndex + 1 < line.length) {
                     line.substring(commaIndex + 1).trim()
                 } else {
                     "Kanal ${items.size + 1}"
                 }
+
+                val yearMatch = Regex("""\b(19\d{2}|20\d{2})\b""").find(currentTitle)
+                currentYear = yearMatch?.groupValues?.getOrNull(1).orEmpty()
             } else if (!line.startsWith("#") && (line.startsWith("http://") || line.startsWith("https://"))) {
                 val lowerUrl = line.lowercase(Locale.ROOT)
                 val lowerGroup = currentGroup.lowercase(Locale.ROOT)
@@ -309,14 +352,18 @@ object JoePlaylistFetcher {
                     JoeChannelItem(
                         id = "${items.size}_${title.hashCode()}",
                         title = title,
-                        subtitle = currentGroup,
+                        subtitle = buildSubtitle(currentGroup, currentYear, "", ""),
                         group = currentGroup,
                         streamUrl = line,
                         category = category,
-                        isLive = category == MediaCategory.LIVE
+                        isLive = category == MediaCategory.LIVE,
+                        posterUrl = currentLogo,
+                        year = currentYear
                     )
                 )
                 currentTitle = ""
+                currentLogo = ""
+                currentYear = ""
             }
         }
         return items
@@ -336,6 +383,7 @@ object JoePlaylistFetcher {
                 val streamId = obj.optString("stream_id", "")
                 val name = obj.optString("name", "Kanal ${i + 1}")
                 val categoryName = obj.optString("category_name", "Canlı TV").ifBlank { "Canlı TV" }
+                val icon = obj.optString("stream_icon", "")
                 if (streamId.isNotEmpty()) {
                     items.add(
                         JoeChannelItem(
@@ -345,7 +393,8 @@ object JoePlaylistFetcher {
                             group = categoryName,
                             streamUrl = "$baseUrl/live/${playlist.username}/${playlist.password}/$streamId.m3u8",
                             category = MediaCategory.LIVE,
-                            isLive = true
+                            isLive = true,
+                            posterUrl = icon
                         )
                     )
                 }
@@ -361,16 +410,27 @@ object JoePlaylistFetcher {
                 val name = obj.optString("name", "Film ${i + 1}")
                 val ext = obj.optString("container_extension", "mp4").ifBlank { "mp4" }
                 val categoryName = obj.optString("category_name", "Filmler").ifBlank { "Filmler" }
+                val poster = obj.optString("stream_icon", obj.optString("cover", ""))
+                val plot = obj.optString("plot", obj.optString("description", ""))
+                val year = obj.optString("releaseDate", obj.optString("year", ""))
+                    .takeIf { it.isNotBlank() }?.take(4).orEmpty()
+                val rating = obj.optString("rating", obj.optString("rating_5based", ""))
+                val genre = obj.optString("genre", "")
                 if (streamId.isNotEmpty()) {
                     items.add(
                         JoeChannelItem(
                             id = "vod_$streamId",
                             title = name,
-                            subtitle = categoryName,
+                            subtitle = buildSubtitle(categoryName, year, rating, genre),
                             group = categoryName,
                             streamUrl = "$baseUrl/movie/${playlist.username}/${playlist.password}/$streamId.$ext",
                             category = MediaCategory.MOVIE,
-                            isLive = false
+                            isLive = false,
+                            posterUrl = poster,
+                            plot = plot,
+                            year = year,
+                            rating = rating,
+                            genre = genre
                         )
                     )
                 }
@@ -385,16 +445,29 @@ object JoePlaylistFetcher {
                 val seriesId = obj.optString("series_id", "")
                 val name = obj.optString("name", "Dizi ${i + 1}")
                 val categoryName = obj.optString("category_name", "Diziler").ifBlank { "Diziler" }
+                val poster = obj.optString("cover", obj.optString("stream_icon", ""))
+                val plot = obj.optString("plot", obj.optString("description", ""))
+                val year = obj.optString("releaseDate", obj.optString("year", ""))
+                    .takeIf { it.isNotBlank() }?.take(4).orEmpty()
+                val rating = obj.optString("rating", obj.optString("rating_5based", ""))
+                val genre = obj.optString("genre", "")
+                val infoUrl = "$baseUrl/player_api.php?username=$user&password=$pass&action=get_series_info&series_id=$seriesId"
                 if (seriesId.isNotEmpty()) {
                     items.add(
                         JoeChannelItem(
                             id = "series_$seriesId",
                             title = name,
-                            subtitle = categoryName,
+                            subtitle = buildSubtitle(categoryName, year, rating, genre),
                             group = categoryName,
-                            streamUrl = "$baseUrl/player_api.php?username=$user&password=$pass&action=get_series_info&series_id=$seriesId",
+                            streamUrl = infoUrl,
                             category = MediaCategory.SERIES,
-                            isLive = false
+                            isLive = false,
+                            posterUrl = poster,
+                            plot = plot,
+                            year = year,
+                            rating = rating,
+                            genre = genre,
+                            seriesInfoUrl = infoUrl
                         )
                     )
                 }
@@ -408,31 +481,79 @@ object JoePlaylistFetcher {
         return items
     }
 
-    suspend fun resolvePlayableUrl(item: JoeChannelItem, playlist: JoePlaylist?): String = withContext(Dispatchers.IO) {
-        if (item.category != MediaCategory.SERIES || !item.streamUrl.contains("get_series_info")) {
-            return@withContext item.streamUrl
+    suspend fun fetchSeriesDetailsAndEpisodes(
+        item: JoeChannelItem,
+        playlist: JoePlaylist?
+    ): Pair<JoeChannelItem, List<JoeEpisodeItem>> = withContext(Dispatchers.IO) {
+        val targetUrl = item.seriesInfoUrl.ifBlank { item.streamUrl }
+        if (!targetUrl.contains("get_series_info") || playlist == null) {
+            val fallbackEp = if (item.streamUrl.isNotBlank()) {
+                listOf(JoeEpisodeItem(item.id, item.title, "1", item.streamUrl))
+            } else {
+                emptyList()
+            }
+            return@withContext item to fallbackEp
         }
+
         try {
-            val infoText = downloadText(item.streamUrl)
+            val infoText = downloadText(targetUrl)
             val root = JSONObject(infoText)
-            val episodesObj = root.optJSONObject("episodes") ?: return@withContext item.streamUrl
-            val seasonKeys = episodesObj.keys()
-            if (seasonKeys.hasNext()) {
-                val firstSeason = seasonKeys.next()
-                val epArray = episodesObj.optJSONArray(firstSeason)
-                if (epArray != null && epArray.length() > 0 && playlist != null) {
-                    val firstEp = epArray.getJSONObject(0)
-                    val epId = firstEp.optString("id", "")
-                    val ext = firstEp.optString("container_extension", "mp4").ifBlank { "mp4" }
-                    val baseUrl = normalizeBaseUrl(playlist.serverUrl)
-                    if (epId.isNotEmpty()) {
-                        return@withContext "$baseUrl/series/${playlist.username}/${playlist.password}/$epId.$ext"
+            val infoObj = root.optJSONObject("info")
+
+            val updatedPlot = infoObj?.optString("plot", "")?.takeIf { it.isNotBlank() } ?: item.plot
+            val updatedYear = infoObj?.optString("releaseDate", "")?.takeIf { it.isNotBlank() }?.take(4) ?: item.year
+            val updatedRating = infoObj?.optString("rating", "")?.takeIf { it.isNotBlank() } ?: item.rating
+            val updatedGenre = infoObj?.optString("genre", "")?.takeIf { it.isNotBlank() } ?: item.genre
+            val updatedPoster = infoObj?.optString("cover", "")?.takeIf { it.isNotBlank() } ?: item.posterUrl
+
+            val enrichedItem = item.copy(
+                plot = updatedPlot,
+                year = updatedYear,
+                rating = updatedRating,
+                genre = updatedGenre,
+                posterUrl = updatedPoster,
+                subtitle = buildSubtitle(item.group, updatedYear, updatedRating, updatedGenre)
+            )
+
+            val episodes = mutableListOf<JoeEpisodeItem>()
+            val episodesObj = root.optJSONObject("episodes")
+            if (episodesObj != null) {
+                val baseUrl = normalizeBaseUrl(playlist.serverUrl)
+                val seasonKeys = episodesObj.keys().asSequence().toList().sortedWith { a, b ->
+                    val numA = a.toIntOrNull()
+                    val numB = b.toIntOrNull()
+                    if (numA != null && numB != null) numA.compareTo(numB) else a.compareTo(b)
+                }
+                for (seasonKey in seasonKeys) {
+                    val epArray = episodesObj.optJSONArray(seasonKey) ?: continue
+                    for (i in 0 until epArray.length()) {
+                        val epObj = epArray.getJSONObject(i)
+                        val epId = epObj.optString("id", "")
+                        val epTitle = epObj.optString("title", "Bölüm ${i + 1}").ifBlank { "Bölüm ${i + 1}" }
+                        val ext = epObj.optString("container_extension", "mp4").ifBlank { "mp4" }
+                        if (epId.isNotEmpty()) {
+                            episodes.add(
+                                JoeEpisodeItem(
+                                    id = epId,
+                                    title = "S${seasonKey} • ${i + 1}. $epTitle",
+                                    seasonNumber = seasonKey,
+                                    streamUrl = "$baseUrl/series/${playlist.username}/${playlist.password}/$epId.$ext"
+                                )
+                            )
+                        }
                     }
                 }
             }
+
+            enrichedItem to episodes
         } catch (_: Exception) {
+            val fallbackEp = if (item.streamUrl.isNotBlank()) {
+                listOf(JoeEpisodeItem(item.id, item.title, "1", item.streamUrl))
+            } else {
+                emptyList()
+            }
+            item to fallbackEp
         }
-        item.streamUrl
     }
 }
 
@@ -492,7 +613,7 @@ fun JoeMainScreen() {
         mutableStateOf(if (playlists.isEmpty()) JoeTab.PLAYLISTS else JoeTab.LIVE)
     }
     var selectedCategory by remember { mutableStateOf("Tümü") }
-    var selectedChannel by remember { mutableStateOf<JoeChannelItem?>(null) }
+    var detailTarget by remember { mutableStateOf<JoeChannelItem?>(null) }
     var activePlayerChannel by remember { mutableStateOf<JoeChannelItem?>(null) }
     var activePlayableUrl by remember { mutableStateOf("") }
     var showAddPlaylistDialog by remember { mutableStateOf(false) }
@@ -525,10 +646,9 @@ fun JoeMainScreen() {
         return SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date())
     }
 
-    fun launchPlayer(item: JoeChannelItem) {
-        coroutineScope.launch {
-            val resolvedUrl = JoePlaylistFetcher.resolvePlayableUrl(item, activePlaylist)
-            activePlayableUrl = resolvedUrl
+    fun startStream(item: JoeChannelItem, url: String) {
+        if (url.isNotBlank()) {
+            activePlayableUrl = url
             activePlayerChannel = item
         }
     }
@@ -600,7 +720,7 @@ fun JoeMainScreen() {
             currentChannel = activePlayerChannel!!,
             streamUrl = activePlayableUrl,
             channels = liveChannels,
-            onSelectChannel = { newChannel -> launchPlayer(newChannel) },
+            onSelectChannel = { newChannel -> startStream(newChannel, newChannel.streamUrl) },
             onClosePlayer = {
                 activePlayerChannel = null
                 activePlayableUrl = ""
@@ -699,7 +819,7 @@ fun JoeMainScreen() {
                     } else {
                         LiveContentSection(
                             channels = liveChannels,
-                            onChannelClick = { launchPlayer(it) }
+                            onChannelClick = { startStream(it, it.streamUrl) }
                         )
                     }
                 }
@@ -717,7 +837,7 @@ fun JoeMainScreen() {
                         MediaGridSection(
                             title = "Filmler (${movieItems.size})",
                             items = movieItems,
-                            onItemClick = { selectedChannel = it }
+                            onItemClick = { detailTarget = it }
                         )
                     }
                 }
@@ -735,7 +855,7 @@ fun JoeMainScreen() {
                         MediaGridSection(
                             title = "Diziler (${seriesItems.size})",
                             items = seriesItems,
-                            onItemClick = { selectedChannel = it }
+                            onItemClick = { detailTarget = it }
                         )
                     }
                 }
@@ -775,18 +895,181 @@ fun JoeMainScreen() {
             )
         }
 
-        selectedChannel?.let { item ->
-            QuickLaunchDialog(
+        detailTarget?.let { item ->
+            MediaDetailDialog(
                 item = item,
-                onDismiss = { selectedChannel = null },
-                onStartPlayback = {
-                    val target = item
-                    selectedChannel = null
-                    launchPlayer(target)
+                playlist = activePlaylist,
+                onDismiss = { detailTarget = null },
+                onPlayUrl = { playItem, playUrl ->
+                    detailTarget = null
+                    startStream(playItem, playUrl)
                 }
             )
         }
     }
+}
+
+@Composable
+private fun MediaDetailDialog(
+    item: JoeChannelItem,
+    playlist: JoePlaylist?,
+    onDismiss: () -> Unit,
+    onPlayUrl: (JoeChannelItem, String) -> Unit
+) {
+    var detailItem by remember(item.id) { mutableStateOf(item) }
+    var episodes by remember(item.id) { mutableStateOf<List<JoeEpisodeItem>>(emptyList()) }
+    var isLoadingEpisodes by remember(item.id) { mutableStateOf(item.category == MediaCategory.SERIES) }
+
+    LaunchedEffect(item.id) {
+        if (item.category == MediaCategory.SERIES) {
+            isLoadingEpisodes = true
+            val (enriched, epList) = JoePlaylistFetcher.fetchSeriesDetailsAndEpisodes(item, playlist)
+            detailItem = enriched
+            episodes = epList
+            isLoadingEpisodes = false
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = JoeColors.CardDark,
+        titleContentColor = JoeColors.TextPrimary,
+        textContentColor = JoeColors.TextSecondary,
+        title = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = detailItem.title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    color = JoeColors.TextPrimary
+                )
+                val badges = listOfNotNull(
+                    detailItem.year.takeIf { it.isNotBlank() },
+                    detailItem.rating.takeIf { it.isNotBlank() && it != "0" && it != "0.0" }?.let { "★ $it" },
+                    detailItem.genre.takeIf { it.isNotBlank() } ?: detailItem.group.takeIf { it.isNotBlank() }
+                )
+                if (badges.isNotEmpty()) {
+                    Text(
+                        text = badges.joinToString(" • "),
+                        color = JoeColors.RedBright,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = detailItem.plot.ifBlank { "Bu içerik için açıklama bilgisi bulunmuyor." },
+                    color = JoeColors.TextSecondary,
+                    fontSize = 13.sp
+                )
+
+                if (detailItem.category == MediaCategory.SERIES) {
+                    Text(
+                        text = "Bölümler",
+                        color = JoeColors.TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    if (isLoadingEpisodes) {
+                        CircularProgressIndicator(
+                            color = JoeColors.RedBright,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    } else if (episodes.isEmpty()) {
+                        Text(
+                            text = "Bölüm listesi alınamadı.",
+                            color = JoeColors.TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 180.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(episodes, key = { it.id + it.title }) { ep ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(JoeColors.SurfaceDark)
+                                        .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            val playMeta = detailItem.copy(
+                                                title = "${detailItem.title} - ${ep.title}",
+                                                subtitle = detailItem.group
+                                            )
+                                            onPlayUrl(playMeta, ep.streamUrl)
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = ep.title,
+                                        color = JoeColors.TextPrimary,
+                                        fontSize = 12.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Rounded.PlayArrow,
+                                        contentDescription = "Bölümü Oynat",
+                                        tint = JoeColors.RedBright,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (detailItem.category == MediaCategory.MOVIE && detailItem.streamUrl.isNotBlank()) {
+                Button(
+                    onClick = { onPlayUrl(detailItem, detailItem.streamUrl) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = JoeColors.RedPrimary,
+                        contentColor = JoeColors.TextPrimary
+                    )
+                ) {
+                    Icon(imageVector = Icons.Rounded.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Filmi Oynat", fontWeight = FontWeight.Bold)
+                }
+            } else if (detailItem.category == MediaCategory.SERIES && episodes.isNotEmpty()) {
+                Button(
+                    onClick = {
+                        val first = episodes.first()
+                        val playMeta = detailItem.copy(
+                            title = "${detailItem.title} - ${first.title}",
+                            subtitle = detailItem.group
+                        )
+                        onPlayUrl(playMeta, first.streamUrl)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = JoeColors.RedPrimary,
+                        contentColor = JoeColors.TextPrimary
+                    )
+                ) {
+                    Icon(imageVector = Icons.Rounded.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("İlk Bölümü Oynat", fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Kapat", color = JoeColors.TextSecondary)
+            }
+        }
+    )
 }
 
 @OptIn(UnstableApi::class)
@@ -810,7 +1093,6 @@ fun JoeVideoPlayerScreen(
     var playerError by remember { mutableStateOf<String?>(null) }
     var isBuffering by remember { mutableStateOf(true) }
 
-    // Sağdaki hızlı kanal listesinin kaydırma konumunu koru
     val channelListState = rememberLazyListState()
     var lastScrolledChannelId by remember { mutableStateOf<String?>(null) }
 
@@ -826,7 +1108,6 @@ fun JoeVideoPlayerScreen(
         }
     }
 
-    // Kanal listesi açıldığında veya aktif kanal değiştiğinde seçili kanalı görünür konuma getir
     LaunchedEffect(showChannelDrawer, currentChannel.id, channels.size) {
         if (showChannelDrawer && channels.isNotEmpty() && lastScrolledChannelId != currentChannel.id) {
             val targetIndex = channels.indexOfFirst { it.id == currentChannel.id }
@@ -1973,42 +2254,6 @@ private fun AddPlaylistDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("İptal", color = JoeColors.TextSecondary)
-            }
-        }
-    )
-}
-
-@Composable
-private fun QuickLaunchDialog(
-    item: JoeChannelItem,
-    onDismiss: () -> Unit,
-    onStartPlayback: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = JoeColors.CardDark,
-        titleContentColor = JoeColors.TextPrimary,
-        textContentColor = JoeColors.TextSecondary,
-        title = {
-            Text(text = item.title, fontWeight = FontWeight.Bold)
-        },
-        text = {
-            Text(text = "${item.subtitle}\n\nYayın oynatıcıya aktarılsın mı?")
-        },
-        confirmButton = {
-            Button(
-                onClick = onStartPlayback,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = JoeColors.RedPrimary,
-                    contentColor = JoeColors.TextPrimary
-                )
-            ) {
-                Text("Oynat", fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Kapat", color = JoeColors.TextSecondary)
             }
         }
     )
