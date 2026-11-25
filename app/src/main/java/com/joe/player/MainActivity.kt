@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -809,6 +810,10 @@ fun JoeVideoPlayerScreen(
     var playerError by remember { mutableStateOf<String?>(null) }
     var isBuffering by remember { mutableStateOf(true) }
 
+    // Sağdaki hızlı kanal listesinin kaydırma konumunu koru
+    val channelListState = rememberLazyListState()
+    var lastScrolledChannelId by remember { mutableStateOf<String?>(null) }
+
     val resizeModes = listOf(
         AspectRatioFrameLayout.RESIZE_MODE_FIT to "Sığdır",
         AspectRatioFrameLayout.RESIZE_MODE_FILL to "Tam Ekran",
@@ -818,6 +823,18 @@ fun JoeVideoPlayerScreen(
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
             playWhenReady = true
+        }
+    }
+
+    // Kanal listesi açıldığında veya aktif kanal değiştiğinde seçili kanalı görünür konuma getir
+    LaunchedEffect(showChannelDrawer, currentChannel.id, channels.size) {
+        if (showChannelDrawer && channels.isNotEmpty() && lastScrolledChannelId != currentChannel.id) {
+            val targetIndex = channels.indexOfFirst { it.id == currentChannel.id }
+            if (targetIndex >= 0) {
+                val scrollIndex = (targetIndex - 1).coerceAtLeast(0)
+                channelListState.scrollToItem(scrollIndex)
+                lastScrolledChannelId = currentChannel.id
+            }
         }
     }
 
@@ -836,7 +853,6 @@ fun JoeVideoPlayerScreen(
         exitFullScreenAndClose()
     }
 
-    // Tam geniş ekran (yatay + sistem çubuklarını gizleme) yönetimi
     LaunchedEffect(isFullLandscape) {
         activity?.let { act ->
             val insetsController = WindowInsetsControllerCompat(act.window, act.window.decorView)
@@ -854,7 +870,6 @@ fun JoeVideoPlayerScreen(
         }
     }
 
-    // Yayın URL'si veya kanal değiştiğinde akışı başlat
     LaunchedEffect(streamUrl) {
         playerError = null
         isBuffering = true
@@ -885,7 +900,6 @@ fun JoeVideoPlayerScreen(
         })
     }
 
-    // Türkçe ses / altyazı tercihi
     LaunchedEffect(selectedAudioMode) {
         val paramsBuilder = exoPlayer.trackSelectionParameters.buildUpon()
         when (selectedAudioMode) {
@@ -1022,7 +1036,6 @@ fun JoeVideoPlayerScreen(
                         )
                     )
             ) {
-                // Üst Bilgi ve Geniş Ekran Kontrolleri
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1070,7 +1083,6 @@ fun JoeVideoPlayerScreen(
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // En-Boy Oranı (Sığdır / Tam Ekran / Yakınlaştır)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
@@ -1097,7 +1109,6 @@ fun JoeVideoPlayerScreen(
                             )
                         }
 
-                        // Yatay / Dikey Geniş Ekran Geçişi
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
@@ -1129,7 +1140,6 @@ fun JoeVideoPlayerScreen(
                             )
                         }
 
-                        // Ekran Uyanık Kalma
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
@@ -1153,7 +1163,6 @@ fun JoeVideoPlayerScreen(
                     }
                 }
 
-                // Alt Kontroller: Ses / Altyazı ve Hızlı Kanal Listesi
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1225,6 +1234,7 @@ fun JoeVideoPlayerScreen(
                 .heightIn(max = 260.dp)
         ) {
             LazyColumn(
+                state = channelListState,
                 modifier = Modifier
                     .clip(RoundedCornerShape(14.dp))
                     .background(JoeColors.SurfaceDark.copy(alpha = 0.96f))
@@ -1240,6 +1250,7 @@ fun JoeVideoPlayerScreen(
                             .clip(RoundedCornerShape(10.dp))
                             .background(if (isCurrent) JoeColors.RedPrimary.copy(alpha = 0.35f) else JoeColors.CardDark)
                             .clickable {
+                                lastScrolledChannelId = item.id
                                 onSelectChannel(item)
                                 showChannelDrawer = false
                             }
