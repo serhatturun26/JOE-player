@@ -56,13 +56,11 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -203,14 +201,6 @@ data class JoeChannelItem(
     val director: String = "",
     val cast: String = "",
     val seriesInfoUrl: String = ""
-)
-
-data class JoeMediaTrackOption(
-    val id: String,
-    val label: String,
-    val language: String?,
-    val groupIndex: Int,
-    val trackIndex: Int
 )
 
 enum class JoeTab(val label: String, val icon: ImageVector) {
@@ -780,6 +770,30 @@ fun JoeAppTheme(content: @Composable () -> Unit) {
     )
 }
 
+private fun filterTabItems(
+    allItems: List<JoeChannelItem>,
+    targetCategory: MediaCategory,
+    selectedGroup: String,
+    rawQuery: String
+): List<JoeChannelItem> {
+    val q = rawQuery.trim()
+    val matchedGroups: Set<String> = if (q.isEmpty()) {
+        emptySet()
+    } else {
+        allItems.asSequence()
+            .filter { it.category == targetCategory && it.group.contains(q, ignoreCase = true) }
+            .map { it.group }
+            .toSet()
+    }
+
+    return allItems.filter { item ->
+        if (item.category != targetCategory) return@filter false
+        val groupMatch = selectedGroup == "Tümü" || item.group.equals(selectedGroup, ignoreCase = true)
+        val searchMatch = q.isEmpty() || item.group in matchedGroups || item.title.contains(q, ignoreCase = true)
+        groupMatch && searchMatch
+    }
+}
+
 @Composable
 fun JoeMainScreen() {
     val context = LocalContext.current
@@ -817,14 +831,23 @@ fun JoeMainScreen() {
 
     val allTabCategories by remember(allItems, selectedTab) {
         derivedStateOf {
-            val tabItems = when (selectedTab) {
-                JoeTab.LIVE -> allItems.filter { it.category == MediaCategory.LIVE }
-                JoeTab.MOVIES -> allItems.filter { it.category == MediaCategory.MOVIE }
-                JoeTab.SERIES -> allItems.filter { it.category == MediaCategory.SERIES }
-                JoeTab.PLAYLISTS -> emptyList()
+            val targetCat = when (selectedTab) {
+                JoeTab.LIVE -> MediaCategory.LIVE
+                JoeTab.MOVIES -> MediaCategory.MOVIE
+                JoeTab.SERIES -> MediaCategory.SERIES
+                JoeTab.PLAYLISTS -> null
             }
-            val groups = tabItems.map { it.group }.filter { it.isNotBlank() }.distinct()
-            listOf("Tümü") + groups
+            if (targetCat == null) {
+                emptyList()
+            } else {
+                val groups = allItems.asSequence()
+                    .filter { it.category == targetCat }
+                    .map { it.group }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .toList()
+                listOf("Tümü") + groups
+            }
         }
     }
 
@@ -844,61 +867,19 @@ fun JoeMainScreen() {
 
     val liveChannels by remember(allItems, selectedCategory, categorySearchQuery) {
         derivedStateOf {
-            val q = categorySearchQuery.trim()
-            val matchingGroups = if (q.isEmpty()) emptySet() else {
-                allItems.asSequence()
-                    .filter { it.category == MediaCategory.LIVE && it.group.contains(q, ignoreCase = true) }
-                    .map { it.group }
-                    .toSet()
-            }
-            allItems.filter { item ->
-                if (item.category != MediaCategory.LIVE) return@filter false
-                val catOk = selectedCategory == "Tümü" || item.group.equals(selectedCategory, ignoreCase = true)
-                val searchOk = q.isEmpty() ||
-                    item.group in matchingGroups ||
-                    item.title.contains(q, ignoreCase = true)
-                catOk && searchOk
-            }
+            filterTabItems(allItems, MediaCategory.LIVE, selectedCategory, categorySearchQuery)
         }
     }
 
     val movieItems by remember(allItems, selectedCategory, categorySearchQuery) {
         derivedStateOf {
-            val q = categorySearchQuery.trim()
-            val matchingGroups = if (q.isEmpty()) emptySet() else {
-                allItems.asSequence()
-                    .filter { it.category == MediaCategory.MOVIE && it.group.contains(q, ignoreCase = true) }
-                    .map { it.group }
-                    .toSet()
-            }
-            allItems.filter { item ->
-                if (item.category != MediaCategory.MOVIE) return@filter false
-                val catOk = selectedCategory == "Tümü" || item.group.equals(selectedCategory, ignoreCase = true)
-                val searchOk = q.isEmpty() ||
-                    item.group in matchingGroups ||
-                    item.title.contains(q, ignoreCase = true)
-                catOk && searchOk
-            }
+            filterTabItems(allItems, MediaCategory.MOVIE, selectedCategory, categorySearchQuery)
         }
     }
 
     val seriesItems by remember(allItems, selectedCategory, categorySearchQuery) {
         derivedStateOf {
-            val q = categorySearchQuery.trim()
-            val matchingGroups = if (q.isEmpty()) emptySet() else {
-                allItems.asSequence()
-                    .filter { it.category == MediaCategory.SERIES && it.group.contains(q, ignoreCase = true) }
-                    .map { it.group }
-                    .toSet()
-            }
-            allItems.filter { item ->
-                if (item.category != MediaCategory.SERIES) return@filter false
-                val catOk = selectedCategory == "Tümü" || item.group.equals(selectedCategory, ignoreCase = true)
-                val searchOk = q.isEmpty() ||
-                    item.group in matchingGroups ||
-                    item.title.contains(q, ignoreCase = true)
-                catOk && searchOk
-            }
+            filterTabItems(allItems, MediaCategory.SERIES, selectedCategory, categorySearchQuery)
         }
     }
 
@@ -1231,15 +1212,6 @@ private fun CategorySearchAndFilterSection(
                 }
             },
             shape = RoundedCornerShape(12.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = JoeColors.CardDark,
-                unfocusedContainerColor = JoeColors.CardDark,
-                focusedBorderColor = JoeColors.RedBright,
-                unfocusedBorderColor = JoeColors.RedMuted,
-                focusedTextColor = JoeColors.TextPrimary,
-                unfocusedTextColor = JoeColors.TextPrimary,
-                cursorColor = JoeColors.RedBright
-            ),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
@@ -1480,45 +1452,6 @@ private fun MediaDetailDialog(
     )
 }
 
-private fun formatDurationMs(ms: Long): String {
-    if (ms <= 0L) return "00:00"
-    val totalSeconds = ms / 1000
-    val hours = totalSeconds / 3600
-    val minutes = (totalSeconds % 3600) / 60
-    val seconds = totalSeconds % 60
-    return if (hours > 0) {
-        String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
-    } else {
-        String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
-    }
-}
-
-private fun formatLanguageDisplay(lang: String?, label: String?, fallbackIndex: Int): String {
-    val cleanCode = lang?.trim()?.lowercase(Locale.ROOT).orEmpty()
-    val mappedLang = when {
-        cleanCode.startsWith("tr") || cleanCode == "tur" -> "Türkçe"
-        cleanCode.startsWith("en") || cleanCode == "eng" -> "İngilizce"
-        cleanCode.startsWith("de") || cleanCode == "deu" || cleanCode == "ger" -> "Almanca"
-        cleanCode.startsWith("fr") || cleanCode == "fra" || cleanCode == "fre" -> "Fransızca"
-        cleanCode.startsWith("es") || cleanCode == "spa" -> "İspanyolca"
-        cleanCode.startsWith("it") || cleanCode == "ita" -> "İtalyanca"
-        cleanCode.startsWith("ar") || cleanCode == "ara" -> "Arapça"
-        cleanCode.startsWith("ru") || cleanCode == "rus" -> "Rusça"
-        cleanCode.startsWith("ja") || cleanCode == "jpn" -> "Japonca"
-        cleanCode.startsWith("ko") || cleanCode == "kor" -> "Korece"
-        cleanCode.isNotBlank() -> cleanCode.uppercase(Locale.ROOT)
-        else -> ""
-    }
-    val cleanLabel = label?.trim().orEmpty()
-    return when {
-        mappedLang.isNotBlank() && cleanLabel.isNotBlank() && !cleanLabel.equals(mappedLang, true) ->
-            "$mappedLang ($cleanLabel)"
-        mappedLang.isNotBlank() -> mappedLang
-        cleanLabel.isNotBlank() -> cleanLabel
-        else -> "Paket #${fallbackIndex + 1}"
-    }
-}
-
 @OptIn(UnstableApi::class)
 @Composable
 fun JoeVideoPlayerScreen(
@@ -1533,22 +1466,12 @@ fun JoeVideoPlayerScreen(
 
     var isOverlayVisible by remember { mutableStateOf(true) }
     var showChannelDrawer by remember { mutableStateOf(false) }
+    var selectedAudioMode by remember { mutableStateOf("Türkçe (TR)") }
     var keepScreenOn by remember { mutableStateOf(true) }
     var isFullLandscape by remember { mutableStateOf(true) }
     var resizeModeIndex by remember { mutableIntStateOf(0) }
     var playerError by remember { mutableStateOf<String?>(null) }
     var isBuffering by remember { mutableStateOf(true) }
-    var isPlaying by remember { mutableStateOf(true) }
-
-    var currentPositionMs by remember { mutableLongStateOf(0L) }
-    var durationMs by remember { mutableLongStateOf(0L) }
-    var isScrubbing by remember { mutableStateOf(false) }
-    var scrubPositionMs by remember { mutableLongStateOf(0L) }
-
-    var audioPackages by remember { mutableStateOf<List<JoeMediaTrackOption>>(emptyList()) }
-    var subtitlePackages by remember { mutableStateOf<List<JoeMediaTrackOption>>(emptyList()) }
-    var selectedAudioId by remember { mutableStateOf<String?>(null) }
-    var selectedSubtitleId by remember { mutableStateOf<String>("off") }
 
     val channelListState = rememberLazyListState()
     var lastScrolledChannelId by remember { mutableStateOf<String?>(null) }
@@ -1565,117 +1488,6 @@ fun JoeVideoPlayerScreen(
         }
     }
 
-    fun refreshTracksFromPlayer(tracks: Tracks) {
-        val foundAudio = mutableListOf<JoeMediaTrackOption>()
-        val foundSubs = mutableListOf<JoeMediaTrackOption>()
-        var activeAudioOptionId: String? = null
-        var activeSubOptionId: String? = null
-
-        tracks.groups.forEachIndexed { gIdx, group ->
-            when (group.type) {
-                C.TRACK_TYPE_AUDIO -> {
-                    for (tIdx in 0 until group.length) {
-                        val fmt = group.getTrackFormat(tIdx)
-                        val optId = "aud_${gIdx}_$tIdx"
-                        val displayName = formatLanguageDisplay(
-                            lang = fmt.language,
-                            label = fmt.label,
-                            fallbackIndex = foundAudio.size
-                        )
-                        foundAudio.add(
-                            JoeMediaTrackOption(
-                                id = optId,
-                                label = displayName,
-                                language = fmt.language,
-                                groupIndex = gIdx,
-                                trackIndex = tIdx
-                            )
-                        )
-                        if (group.isTrackSelected(tIdx)) {
-                            activeAudioOptionId = optId
-                        }
-                    }
-                }
-                C.TRACK_TYPE_TEXT -> {
-                    for (tIdx in 0 until group.length) {
-                        val fmt = group.getTrackFormat(tIdx)
-                        val optId = "sub_${gIdx}_$tIdx"
-                        val displayName = formatLanguageDisplay(
-                            lang = fmt.language,
-                            label = fmt.label,
-                            fallbackIndex = foundSubs.size
-                        )
-                        foundSubs.add(
-                            JoeMediaTrackOption(
-                                id = optId,
-                                label = displayName,
-                                language = fmt.language,
-                                groupIndex = gIdx,
-                                trackIndex = tIdx
-                            )
-                        )
-                        if (group.isTrackSelected(tIdx)) {
-                            activeSubOptionId = optId
-                        }
-                    }
-                }
-            }
-        }
-
-        audioPackages = foundAudio
-        subtitlePackages = foundSubs
-        if (activeAudioOptionId != null) {
-            selectedAudioId = activeAudioOptionId
-        } else if (foundAudio.isNotEmpty() && selectedAudioId == null) {
-            selectedAudioId = foundAudio.first().id
-        }
-        selectedSubtitleId = if (foundSubs.isEmpty()) "off" else (activeSubOptionId ?: "off")
-    }
-
-    fun applyAudioPackage(option: JoeMediaTrackOption) {
-        selectedAudioId = option.id
-        val tracks = exoPlayer.currentTracks
-        if (option.groupIndex < tracks.groups.size) {
-            val group = tracks.groups[option.groupIndex]
-            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
-                .buildUpon()
-                .setOverrideForType(
-                    androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, option.trackIndex)
-                )
-                .build()
-        } else if (!option.language.isNullOrBlank()) {
-            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
-                .buildUpon()
-                .setPreferredAudioLanguage(option.language)
-                .build()
-        }
-    }
-
-    fun applySubtitlePackage(optionId: String) {
-        selectedSubtitleId = optionId
-        if (optionId == "off") {
-            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
-                .buildUpon()
-                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                .build()
-            return
-        }
-        val target = subtitlePackages.find { it.id == optionId } ?: return
-        val tracks = exoPlayer.currentTracks
-        val builder = exoPlayer.trackSelectionParameters
-            .buildUpon()
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-        if (target.groupIndex < tracks.groups.size) {
-            val group = tracks.groups[target.groupIndex]
-            builder.setOverrideForType(
-                androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, target.trackIndex)
-            )
-        } else if (!target.language.isNullOrBlank()) {
-            builder.setPreferredTextLanguage(target.language)
-        }
-        exoPlayer.trackSelectionParameters = builder.build()
-    }
-
     LaunchedEffect(showChannelDrawer, currentChannel.id, channels.size) {
         if (showChannelDrawer && channels.isNotEmpty() && lastScrolledChannelId != currentChannel.id) {
             val targetIndex = channels.indexOfFirst { it.id == currentChannel.id }
@@ -1684,18 +1496,6 @@ fun JoeVideoPlayerScreen(
                 channelListState.scrollToItem(scrollIndex)
                 lastScrolledChannelId = currentChannel.id
             }
-        }
-    }
-
-    LaunchedEffect(exoPlayer) {
-        while (true) {
-            if (!isScrubbing) {
-                currentPositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
-            }
-            val rawDur = exoPlayer.duration
-            durationMs = if (rawDur != C.TIME_UNSET && rawDur > 0L) rawDur else 0L
-            isPlaying = exoPlayer.isPlaying
-            delay(500L)
         }
     }
 
@@ -1734,13 +1534,6 @@ fun JoeVideoPlayerScreen(
     LaunchedEffect(streamUrl) {
         playerError = null
         isBuffering = true
-        currentPositionMs = 0L
-        durationMs = 0L
-        audioPackages = emptyList()
-        subtitlePackages = emptyList()
-        selectedAudioId = null
-        selectedSubtitleId = "off"
-
         val fallbackUrl = if (streamUrl.endsWith(".m3u8")) {
             streamUrl.removeSuffix(".m3u8") + ".ts"
         } else {
@@ -1753,18 +1546,6 @@ fun JoeVideoPlayerScreen(
         exoPlayer.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 isBuffering = playbackState == Player.STATE_BUFFERING
-                val rawDur = exoPlayer.duration
-                if (rawDur != C.TIME_UNSET && rawDur > 0L) {
-                    durationMs = rawDur
-                }
-            }
-
-            override fun onIsPlayingChanged(playing: Boolean) {
-                isPlaying = playing
-            }
-
-            override fun onTracksChanged(tracks: Tracks) {
-                refreshTracksFromPlayer(tracks)
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -1778,6 +1559,28 @@ fun JoeVideoPlayerScreen(
                 }
             }
         })
+    }
+
+    LaunchedEffect(selectedAudioMode) {
+        val paramsBuilder = exoPlayer.trackSelectionParameters.buildUpon()
+        when (selectedAudioMode) {
+            "Türkçe (TR)" -> {
+                paramsBuilder
+                    .setPreferredAudioLanguages("tr", "tur", "tr-TR")
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            }
+            "Orijinal" -> {
+                paramsBuilder
+                    .setPreferredAudioLanguages()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            }
+            "Türkçe Altyazı" -> {
+                paramsBuilder
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .setPreferredTextLanguages("tr", "tur", "tr-TR")
+            }
+        }
+        exoPlayer.trackSelectionParameters = paramsBuilder.build()
     }
 
     DisposableEffect(keepScreenOn) {
@@ -1805,9 +1608,9 @@ fun JoeVideoPlayerScreen(
         }
     }
 
+    val audioTracks = listOf("Türkçe (TR)", "Orijinal", "Türkçe Altyazı")
     val currentResizeMode = resizeModes[resizeModeIndex].first
     val currentResizeLabel = resizeModes[resizeModeIndex].second
-    val showSeekBar = !currentChannel.isLive && durationMs > 0L
 
     Box(
         modifier = Modifier
@@ -1887,9 +1690,9 @@ fun JoeVideoPlayerScreen(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.Black.copy(alpha = 0.84f),
+                                Color.Black.copy(alpha = 0.82f),
                                 Color.Transparent,
-                                Color.Black.copy(alpha = 0.90f)
+                                Color.Black.copy(alpha = 0.88f)
                             )
                         )
                     )
@@ -2025,188 +1828,41 @@ fun JoeVideoPlayerScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.BottomCenter)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (showSeekBar) {
-                        val displayPos = if (isScrubbing) scrubPositionMs else currentPositionMs
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            IconButton(
-                                onClick = {
-                                    if (exoPlayer.isPlaying) {
-                                        exoPlayer.pause()
-                                    } else {
-                                        exoPlayer.play()
-                                    }
-                                },
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        audioTracks.forEach { track ->
+                            val active = selectedAudioMode == track
+                            Box(
                                 modifier = Modifier
-                                    .size(34.dp)
-                                    .clip(CircleShape)
-                                    .background(JoeColors.CardDark.copy(alpha = 0.92f))
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        if (active) JoeColors.RedPrimary
+                                        else JoeColors.CardDark.copy(alpha = 0.92f)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (active) JoeColors.RedBright else JoeColors.RedMuted,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable { selectedAudioMode = track }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
                             ) {
-                                Icon(
-                                    imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                    contentDescription = if (isPlaying) "Duraklat" else "Oynat",
-                                    tint = JoeColors.TextPrimary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-
-                            Text(
-                                text = formatDurationMs(displayPos),
-                                color = JoeColors.TextPrimary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-
-                            Slider(
-                                value = displayPos.toFloat().coerceIn(0f, durationMs.toFloat().coerceAtLeast(1f)),
-                                onValueChange = { newVal ->
-                                    isScrubbing = true
-                                    scrubPositionMs = newVal.toLong()
-                                },
-                                onValueChangeFinished = {
-                                    exoPlayer.seekTo(scrubPositionMs)
-                                    currentPositionMs = scrubPositionMs
-                                    isScrubbing = false
-                                },
-                                valueRange = 0f..durationMs.toFloat().coerceAtLeast(1f),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = JoeColors.RedBright,
-                                    activeTrackColor = JoeColors.RedPrimary,
-                                    inactiveTrackColor = JoeColors.CardDark
-                                ),
-                                modifier = Modifier.weight(1f)
-                            )
-
-                            Text(
-                                text = formatDurationMs(durationMs),
-                                color = JoeColors.TextSecondary,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-
-                    if (audioPackages.isNotEmpty()) {
-                        LazyRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            item {
                                 Text(
-                                    text = "Dil:",
-                                    color = JoeColors.TextSecondary,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(end = 2.dp)
+                                    text = track,
+                                    color = JoeColors.TextPrimary,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
                                 )
-                            }
-                            items(audioPackages, key = { it.id }) { pkg ->
-                                val active = selectedAudioId == pkg.id
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(
-                                            if (active) JoeColors.RedPrimary
-                                            else JoeColors.CardDark.copy(alpha = 0.92f)
-                                        )
-                                        .border(
-                                            1.dp,
-                                            if (active) JoeColors.RedBright else JoeColors.RedMuted,
-                                            RoundedCornerShape(8.dp)
-                                        )
-                                        .clickable { applyAudioPackage(pkg) }
-                                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                                ) {
-                                    Text(
-                                        text = pkg.label,
-                                        color = JoeColors.TextPrimary,
-                                        fontSize = 11.sp,
-                                        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
                             }
                         }
                     }
 
-                    if (subtitlePackages.isNotEmpty()) {
-                        LazyRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            item {
-                                Text(
-                                    text = "Altyazı:",
-                                    color = JoeColors.TextSecondary,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(end = 2.dp)
-                                )
-                                val offSelected = selectedSubtitleId == "off"
-                                Box(
-                                    modifier = Modifier
-                                        .padding(end = 6.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(
-                                            if (offSelected) JoeColors.RedPrimary
-                                            else JoeColors.CardDark.copy(alpha = 0.92f)
-                                        )
-                                        .border(
-                                            1.dp,
-                                            if (offSelected) JoeColors.RedBright else JoeColors.RedMuted,
-                                            RoundedCornerShape(8.dp)
-                                        )
-                                        .clickable { applySubtitlePackage("off") }
-                                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                                ) {
-                                    Text(
-                                        text = "Kapalı",
-                                        color = JoeColors.TextPrimary,
-                                        fontSize = 11.sp,
-                                        fontWeight = if (offSelected) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                }
-                            }
-                            items(subtitlePackages, key = { it.id }) { sub ->
-                                val active = selectedSubtitleId == sub.id
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(
-                                            if (active) JoeColors.RedPrimary
-                                            else JoeColors.CardDark.copy(alpha = 0.92f)
-                                        )
-                                        .border(
-                                            1.dp,
-                                            if (active) JoeColors.RedBright else JoeColors.RedMuted,
-                                            RoundedCornerShape(8.dp)
-                                        )
-                                        .clickable { applySubtitlePackage(sub.id) }
-                                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                                ) {
-                                    Text(
-                                        text = sub.label,
-                                        color = JoeColors.TextPrimary,
-                                        fontSize = 11.sp,
-                                        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    if (channels.isNotEmpty() && currentChannel.isLive) {
+                    if (channels.isNotEmpty()) {
                         Button(
                             onClick = { showChannelDrawer = !showChannelDrawer },
                             colors = ButtonDefaults.buttonColors(
@@ -2674,4 +2330,299 @@ private fun PlaylistManagementSection(
     onSelectPlaylist: (String) -> Unit,
     onRefreshPlaylist: (String) -> Unit,
     onDeletePlaylist: (String) -> Unit
-)
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Listelerim",
+                        color = JoeColors.TextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Xtream Codes • M3U/M3U8 • GitHub",
+                        color = JoeColors.TextSecondary,
+                        fontSize = 12.sp
+                    )
+                }
+
+                Button(
+                    onClick = onOpenAddDialog,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = JoeColors.RedPrimary,
+                        contentColor = JoeColors.TextPrimary
+                    ),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Icon(imageVector = Icons.Rounded.Add, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Liste Ekle", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        if (playlists.isEmpty()) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = JoeColors.CardDark),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "Kayıtlı Liste Bulunmuyor",
+                            color = JoeColors.RedBright,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                        Text(
+                            text = "Yeni liste eklediğinde bilgilerin cihaz hafızasına kaydedilir; tekrar giriş yapmadan güncelleyebilir veya silebilirsin.",
+                            color = JoeColors.TextSecondary,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+        } else {
+            items(playlists, key = { it.id }) { item ->
+                val isActive = item.id == activePlaylistId
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(JoeColors.CardDark)
+                        .border(
+                            width = if (isActive) 1.5.dp else 1.dp,
+                            color = if (isActive) JoeColors.RedBright else JoeColors.RedMuted,
+                            shape = RoundedCornerShape(14.dp)
+                        )
+                        .clickable { onSelectPlaylist(item.id) }
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(JoeColors.RedMuted)
+                                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                            ) {
+                                Text(
+                                    text = item.type.label,
+                                    color = JoeColors.RedBright,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            if (isActive) {
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(JoeColors.RedPrimary)
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
+                                    Text(
+                                        text = "AKTİF",
+                                        color = Color.White,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        Row {
+                            IconButton(
+                                onClick = { onRefreshPlaylist(item.id) },
+                                enabled = !isRefreshing,
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Refresh,
+                                    contentDescription = "Güncelle",
+                                    tint = if (isRefreshing) JoeColors.TextSecondary else JoeColors.RedBright
+                                )
+                            }
+                            IconButton(
+                                onClick = { onDeletePlaylist(item.id) },
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.DeleteOutline,
+                                    contentDescription = "Sil",
+                                    tint = JoeColors.TextSecondary
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = item.name,
+                        color = JoeColors.TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    Text(
+                        text = item.serverUrl,
+                        color = JoeColors.TextSecondary,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+
+                    if (item.lastUpdated.isNotEmpty()) {
+                        Text(
+                            text = "Son güncelleme: ${item.lastUpdated}",
+                            color = JoeColors.TextSecondary,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddPlaylistDialog(
+    onDismiss: () -> Unit,
+    onSave: (name: String, type: PlaylistType, url: String, user: String, pass: String) -> Unit
+) {
+    var selectedType by remember { mutableStateOf(PlaylistType.XTREAM) }
+    var name by remember { mutableStateOf("") }
+    var serverUrl by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+
+    val canSave = name.isNotBlank() && serverUrl.isNotBlank() &&
+        (selectedType != PlaylistType.XTREAM || (username.isNotBlank() && password.isNotBlank()))
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = JoeColors.CardDark,
+        titleContentColor = JoeColors.TextPrimary,
+        title = {
+            Text(text = "Yeni Liste Ekle", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    PlaylistType.entries.forEach { type ->
+                        val active = selectedType == type
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (active) JoeColors.RedPrimary else JoeColors.SurfaceDark)
+                                .border(
+                                    1.dp,
+                                    if (active) JoeColors.RedBright else JoeColors.RedMuted,
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .clickable { selectedType = type }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = when (type) {
+                                    PlaylistType.XTREAM -> "Xtream"
+                                    PlaylistType.M3U -> "M3U"
+                                    PlaylistType.GITHUB -> "GitHub"
+                                },
+                                color = JoeColors.TextPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Liste Adı") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                OutlinedTextField(
+                    value = serverUrl,
+                    onValueChange = { serverUrl = it },
+                    label = {
+                        Text(
+                            when (selectedType) {
+                                PlaylistType.XTREAM -> "Sunucu URL (http://...)"
+                                PlaylistType.M3U -> "M3U / M3U8 Bağlantısı"
+                                PlaylistType.GITHUB -> "GitHub Raw Liste URL"
+                            }
+                        )
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (selectedType == PlaylistType.XTREAM) {
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it },
+                        label = { Text("Kullanıcı Adı") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text("Şifre") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(name, selectedType, serverUrl, username, password) },
+                enabled = canSave,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = JoeColors.RedPrimary,
+                    contentColor = JoeColors.TextPrimary
+                )
+            ) {
+                Text("Kaydet", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("İptal", color = JoeColors.TextSecondary)
+            }
+        }
+    )
+}
