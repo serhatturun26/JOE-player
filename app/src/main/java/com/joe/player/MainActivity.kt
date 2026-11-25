@@ -263,70 +263,82 @@ object JoePlaylistStorage {
             .apply()
     }
 
-    fun saveCachedItems(context: Context, playlistId: String, items: List<JoeChannelItem>) {
-        val array = JSONArray()
-        items.forEach { item ->
-            val obj = JSONObject().apply {
-                put("id", item.id)
-                put("title", item.title)
-                put("subtitle", item.subtitle)
-                put("group", item.group)
-                put("streamUrl", item.streamUrl)
-                put("category", item.category.name)
-                put("isLive", item.isLive)
-                put("posterUrl", item.posterUrl)
-                put("plot", item.plot)
-                put("year", item.year)
-                put("rating", item.rating)
-                put("genre", item.genre)
-                put("duration", item.duration)
-                put("director", item.director)
-                put("cast", item.cast)
-                put("seriesInfoUrl", item.seriesInfoUrl)
+    suspend fun saveCachedItems(context: Context, playlistId: String, items: List<JoeChannelItem>) =
+        withContext(Dispatchers.Default) {
+            try {
+                val array = JSONArray()
+                items.forEach { item ->
+                    val obj = JSONObject().apply {
+                        put("id", item.id)
+                        put("title", item.title)
+                        put("subtitle", item.subtitle)
+                        put("group", item.group)
+                        put("streamUrl", item.streamUrl)
+                        put("category", item.category.name)
+                        put("isLive", item.isLive)
+                        put("posterUrl", item.posterUrl)
+                        put("plot", item.plot)
+                        put("year", item.year)
+                        put("rating", item.rating)
+                        put("genre", item.genre)
+                        put("duration", item.duration)
+                        put("director", item.director)
+                        put("cast", item.cast)
+                        put("seriesInfoUrl", item.seriesInfoUrl)
+                    }
+                    array.put(obj)
+                }
+                val jsonStr = array.toString()
+                withContext(Dispatchers.IO) {
+                    context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString(KEY_CACHE_PREFIX + playlistId, jsonStr)
+                        .apply()
+                }
+            } catch (_: OutOfMemoryError) {
+            } catch (_: Exception) {
             }
-            array.put(obj)
         }
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_CACHE_PREFIX + playlistId, array.toString())
-            .apply()
-    }
 
-    fun loadCachedItems(context: Context, playlistId: String): List<JoeChannelItem> {
-        val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getString(KEY_CACHE_PREFIX + playlistId, null) ?: return emptyList()
-        val result = mutableListOf<JoeChannelItem>()
-        try {
-            val array = JSONArray(raw)
-            for (i in 0 until array.length()) {
-                val obj = array.getJSONObject(i)
-                val catName = obj.optString("category", MediaCategory.LIVE.name)
-                val category = runCatching { MediaCategory.valueOf(catName) }.getOrDefault(MediaCategory.LIVE)
-                result.add(
-                    JoeChannelItem(
-                        id = obj.getString("id"),
-                        title = obj.getString("title"),
-                        subtitle = obj.optString("subtitle", ""),
-                        group = obj.optString("group", "Genel"),
-                        streamUrl = obj.optString("streamUrl", ""),
-                        category = category,
-                        isLive = obj.optBoolean("isLive", true),
-                        posterUrl = obj.optString("posterUrl", ""),
-                        plot = obj.optString("plot", ""),
-                        year = obj.optString("year", ""),
-                        rating = obj.optString("rating", ""),
-                        genre = obj.optString("genre", ""),
-                        duration = obj.optString("duration", ""),
-                        director = obj.optString("director", ""),
-                        cast = obj.optString("cast", ""),
-                        seriesInfoUrl = obj.optString("seriesInfoUrl", "")
-                    )
-                )
+    suspend fun loadCachedItems(context: Context, playlistId: String): List<JoeChannelItem> =
+        withContext(Dispatchers.IO) {
+            val raw = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_CACHE_PREFIX + playlistId, null) ?: return@withContext emptyList()
+            withContext(Dispatchers.Default) {
+                val result = mutableListOf<JoeChannelItem>()
+                try {
+                    val array = JSONArray(raw)
+                    for (i in 0 until array.length()) {
+                        val obj = array.getJSONObject(i)
+                        val catName = obj.optString("category", MediaCategory.LIVE.name)
+                        val category = runCatching { MediaCategory.valueOf(catName) }.getOrDefault(MediaCategory.LIVE)
+                        result.add(
+                            JoeChannelItem(
+                                id = obj.getString("id"),
+                                title = obj.getString("title"),
+                                subtitle = obj.optString("subtitle", ""),
+                                group = obj.optString("group", "Genel"),
+                                streamUrl = obj.optString("streamUrl", ""),
+                                category = category,
+                                isLive = obj.optBoolean("isLive", true),
+                                posterUrl = obj.optString("posterUrl", ""),
+                                plot = obj.optString("plot", ""),
+                                year = obj.optString("year", ""),
+                                rating = obj.optString("rating", ""),
+                                genre = obj.optString("genre", ""),
+                                duration = obj.optString("duration", ""),
+                                director = obj.optString("director", ""),
+                                cast = obj.optString("cast", ""),
+                                seriesInfoUrl = obj.optString("seriesInfoUrl", "")
+                            )
+                        )
+                    }
+                } catch (_: OutOfMemoryError) {
+                } catch (_: Exception) {
+                }
+                result
             }
-        } catch (_: Exception) {
         }
-        return result
-    }
 
     fun deleteCachedItems(context: Context, playlistId: String) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -360,6 +372,8 @@ object JoePlaylistFetcher {
             } else {
                 Result.success(items)
             }
+        } catch (_: OutOfMemoryError) {
+            Result.failure(Exception("Liste çok büyük olduğu için bellek sınırına ulaşıldı."))
         } catch (e: Exception) {
             Result.failure(Exception("Bağlantı hatası: ${e.message ?: "Bilinmeyen hata"}"))
         }
@@ -768,10 +782,14 @@ fun JoeMainScreen() {
         playlists.find { it.id == activePlaylistId } ?: playlists.firstOrNull()
     }
 
-    var allItems by remember(activePlaylist?.id) {
-        mutableStateOf(
-            activePlaylist?.let { JoePlaylistStorage.loadCachedItems(context, it.id) } ?: emptyList()
-        )
+    var allItems by remember { mutableStateOf<List<JoeChannelItem>>(emptyList()) }
+
+    LaunchedEffect(activePlaylist?.id) {
+        allItems = if (activePlaylist != null) {
+            JoePlaylistStorage.loadCachedItems(context, activePlaylist.id)
+        } else {
+            emptyList()
+        }
     }
 
     var isRefreshing by remember { mutableStateOf(false) }
@@ -786,28 +804,36 @@ fun JoeMainScreen() {
     var activePlayableUrl by remember { mutableStateOf("") }
     var showAddPlaylistDialog by remember { mutableStateOf(false) }
 
-    val liveChannels = remember(allItems, selectedCategory) {
-        val base = allItems.filter { it.category == MediaCategory.LIVE }
-        if (selectedCategory == "Tümü") base else base.filter { it.group.equals(selectedCategory, ignoreCase = true) }
+    val liveChannels by remember(allItems, selectedCategory) {
+        derivedStateOf {
+            val base = allItems.filter { it.category == MediaCategory.LIVE }
+            if (selectedCategory == "Tümü") base else base.filter { it.group.equals(selectedCategory, ignoreCase = true) }
+        }
     }
-    val movieItems = remember(allItems, selectedCategory) {
-        val base = allItems.filter { it.category == MediaCategory.MOVIE }
-        if (selectedCategory == "Tümü") base else base.filter { it.group.equals(selectedCategory, ignoreCase = true) }
+    val movieItems by remember(allItems, selectedCategory) {
+        derivedStateOf {
+            val base = allItems.filter { it.category == MediaCategory.MOVIE }
+            if (selectedCategory == "Tümü") base else base.filter { it.group.equals(selectedCategory, ignoreCase = true) }
+        }
     }
-    val seriesItems = remember(allItems, selectedCategory) {
-        val base = allItems.filter { it.category == MediaCategory.SERIES }
-        if (selectedCategory == "Tümü") base else base.filter { it.group.equals(selectedCategory, ignoreCase = true) }
+    val seriesItems by remember(allItems, selectedCategory) {
+        derivedStateOf {
+            val base = allItems.filter { it.category == MediaCategory.SERIES }
+            if (selectedCategory == "Tümü") base else base.filter { it.group.equals(selectedCategory, ignoreCase = true) }
+        }
     }
 
-    val dynamicCategories = remember(allItems, selectedTab) {
-        val tabItems = when (selectedTab) {
-            JoeTab.LIVE -> allItems.filter { it.category == MediaCategory.LIVE }
-            JoeTab.MOVIES -> allItems.filter { it.category == MediaCategory.MOVIE }
-            JoeTab.SERIES -> allItems.filter { it.category == MediaCategory.SERIES }
-            JoeTab.PLAYLISTS -> emptyList()
+    val dynamicCategories by remember(allItems, selectedTab) {
+        derivedStateOf {
+            val tabItems = when (selectedTab) {
+                JoeTab.LIVE -> allItems.filter { it.category == MediaCategory.LIVE }
+                JoeTab.MOVIES -> allItems.filter { it.category == MediaCategory.MOVIE }
+                JoeTab.SERIES -> allItems.filter { it.category == MediaCategory.SERIES }
+                JoeTab.PLAYLISTS -> emptyList()
+            }
+            val groups = tabItems.map { it.group }.filter { it.isNotBlank() }.distinct().take(25)
+            listOf("Tümü") + groups
         }
-        val groups = tabItems.map { it.group }.filter { it.isNotBlank() }.distinct().take(25)
-        listOf("Tümü") + groups
     }
 
     fun nowFormatted(): String {
@@ -828,7 +854,6 @@ fun JoeMainScreen() {
 
         coroutineScope.launch {
             val result = JoePlaylistFetcher.fetchAndParse(playlist)
-            isRefreshing = false
             result.onSuccess { fetchedItems ->
                 JoePlaylistStorage.saveCachedItems(context, playlist.id, fetchedItems)
                 val updatedList = playlists.map {
@@ -848,6 +873,7 @@ fun JoeMainScreen() {
             }.onFailure { err ->
                 statusMessage = err.message ?: "Liste güncellenemedi."
             }
+            isRefreshing = false
         }
     }
 
@@ -876,10 +902,12 @@ fun JoeMainScreen() {
         activePlaylistId = id
         JoePlaylistStorage.setActivePlaylistId(context, id)
         selectedCategory = "Tümü"
-        val cached = JoePlaylistStorage.loadCachedItems(context, id)
-        allItems = cached
-        if (cached.isEmpty()) {
-            playlists.find { it.id == id }?.let { refreshPlaylist(it) }
+        coroutineScope.launch {
+            val cached = JoePlaylistStorage.loadCachedItems(context, id)
+            allItems = cached
+            if (cached.isEmpty()) {
+                playlists.find { it.id == id }?.let { refreshPlaylist(it) }
+            }
         }
     }
 
