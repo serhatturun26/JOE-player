@@ -55,6 +55,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
@@ -201,6 +202,13 @@ data class JoeChannelItem(
     val director: String = "",
     val cast: String = "",
     val seriesInfoUrl: String = ""
+)
+
+data class JoePlaybackSession(
+    val channel: JoeChannelItem,
+    val streamUrl: String,
+    val episodes: List<JoeEpisodeItem> = emptyList(),
+    val currentEpisodeIndex: Int = -1
 )
 
 enum class JoeTab(val label: String, val icon: ImageVector) {
@@ -825,8 +833,7 @@ fun JoeMainScreen() {
     var selectedCategory by remember { mutableStateOf("Tümü") }
     var categorySearchQuery by remember { mutableStateOf("") }
     var detailTarget by remember { mutableStateOf<JoeChannelItem?>(null) }
-    var activePlayerChannel by remember { mutableStateOf<JoeChannelItem?>(null) }
-    var activePlayableUrl by remember { mutableStateOf("") }
+    var playbackSession by remember { mutableStateOf<JoePlaybackSession?>(null) }
     var showAddPlaylistDialog by remember { mutableStateOf(false) }
 
     val allTabCategories by remember(allItems, selectedTab) {
@@ -887,10 +894,19 @@ fun JoeMainScreen() {
         return SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date())
     }
 
-    fun startStream(item: JoeChannelItem, url: String) {
+    fun startStream(
+        item: JoeChannelItem,
+        url: String,
+        episodes: List<JoeEpisodeItem> = emptyList(),
+        episodeIndex: Int = -1
+    ) {
         if (url.isNotBlank()) {
-            activePlayableUrl = url
-            activePlayerChannel = item
+            playbackSession = JoePlaybackSession(
+                channel = item,
+                streamUrl = url,
+                episodes = episodes,
+                currentEpisodeIndex = episodeIndex
+            )
         }
     }
 
@@ -960,15 +976,28 @@ fun JoeMainScreen() {
         }
     }
 
-    if (activePlayerChannel != null && activePlayableUrl.isNotEmpty()) {
+    playbackSession?.let { session ->
         JoeVideoPlayerScreen(
-            currentChannel = activePlayerChannel!!,
-            streamUrl = activePlayableUrl,
+            session = session,
             channels = liveChannels,
             onSelectChannel = { newChannel -> startStream(newChannel, newChannel.streamUrl) },
+            onSelectEpisode = { targetIndex, baseSeries, epList ->
+                val ep = epList.getOrNull(targetIndex)
+                if (ep != null) {
+                    val playMeta = baseSeries.copy(
+                        title = "${baseSeries.title} - ${ep.title}",
+                        subtitle = baseSeries.group
+                    )
+                    startStream(
+                        item = playMeta,
+                        url = ep.streamUrl,
+                        episodes = epList,
+                        episodeIndex = targetIndex
+                    )
+                }
+            },
             onClosePlayer = {
-                activePlayerChannel = null
-                activePlayableUrl = ""
+                playbackSession = null
             }
         )
         return
@@ -1156,9 +1185,25 @@ fun JoeMainScreen() {
                 item = item,
                 playlist = activePlaylist,
                 onDismiss = { detailTarget = null },
-                onPlayUrl = { playItem, playUrl ->
+                onPlayMovie = { playItem, playUrl ->
                     detailTarget = null
                     startStream(playItem, playUrl)
+                },
+                onPlayEpisode = { baseSeries, epList, epIndex ->
+                    detailTarget = null
+                    val ep = epList.getOrNull(epIndex)
+                    if (ep != null) {
+                        val playMeta = baseSeries.copy(
+                            title = "${baseSeries.title} - ${ep.title}",
+                            subtitle = baseSeries.group
+                        )
+                        startStream(
+                            item = playMeta,
+                            url = ep.streamUrl,
+                            episodes = epList,
+                            currentEpisodeIndex = epIndex
+                        )
+                    }
                 }
             )
         }
@@ -1230,7 +1275,8 @@ private fun MediaDetailDialog(
     item: JoeChannelItem,
     playlist: JoePlaylist?,
     onDismiss: () -> Unit,
-    onPlayUrl: (JoeChannelItem, String) -> Unit
+    onPlayMovie: (JoeChannelItem, String) -> Unit,
+    onPlayEpisode: (JoeChannelItem, List<JoeEpisodeItem>, Int) -> Unit
 ) {
     var detailItem by remember(item.id) { mutableStateOf(item) }
     var episodes by remember(item.id) { mutableStateOf<List<JoeEpisodeItem>>(emptyList()) }
@@ -1372,20 +1418,14 @@ private fun MediaDetailDialog(
                             fontSize = 12.sp
                         )
                     } else {
-                        episodes.forEach { ep ->
+                        episodes.forEachIndexed { idx, ep ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(8.dp))
                                     .background(JoeColors.SurfaceDark)
                                     .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(8.dp))
-                                    .clickable {
-                                        val playMeta = detailItem.copy(
-                                            title = "${detailItem.title} - ${ep.title}",
-                                            subtitle = detailItem.group
-                                        )
-                                        onPlayUrl(playMeta, ep.streamUrl)
-                                    }
+                                    .clickable { onPlayEpisode(detailItem, episodes, idx) }
                                     .padding(horizontal = 10.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
@@ -1413,7 +1453,7 @@ private fun MediaDetailDialog(
         confirmButton = {
             if (detailItem.category == MediaCategory.MOVIE && detailItem.streamUrl.isNotBlank()) {
                 Button(
-                    onClick = { onPlayUrl(detailItem, detailItem.streamUrl) },
+                    onClick = { onPlayMovie(detailItem, detailItem.streamUrl) },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = JoeColors.RedPrimary,
                         contentColor = JoeColors.TextPrimary
@@ -1425,14 +1465,7 @@ private fun MediaDetailDialog(
                 }
             } else if (detailItem.category == MediaCategory.SERIES && episodes.isNotEmpty()) {
                 Button(
-                    onClick = {
-                        val first = episodes.first()
-                        val playMeta = detailItem.copy(
-                            title = "${detailItem.title} - ${first.title}",
-                            subtitle = detailItem.group
-                        )
-                        onPlayUrl(playMeta, first.streamUrl)
-                    },
+                    onClick = { onPlayEpisode(detailItem, episodes, 0) },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = JoeColors.RedPrimary,
                         contentColor = JoeColors.TextPrimary
@@ -1455,18 +1488,25 @@ private fun MediaDetailDialog(
 @OptIn(UnstableApi::class)
 @Composable
 fun JoeVideoPlayerScreen(
-    currentChannel: JoeChannelItem,
-    streamUrl: String,
+    session: JoePlaybackSession,
     channels: List<JoeChannelItem>,
     onSelectChannel: (JoeChannelItem) -> Unit,
+    onSelectEpisode: (Int, JoeChannelItem, List<JoeEpisodeItem>) -> Unit,
     onClosePlayer: () -> Unit
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
 
+    val currentChannel = session.channel
+    val streamUrl = session.streamUrl
+    val hasPrevEpisode = session.episodes.isNotEmpty() && session.currentEpisodeIndex > 0
+    val hasNextEpisode = session.episodes.isNotEmpty() &&
+        session.currentEpisodeIndex in 0 until (session.episodes.size - 1)
+
     var isOverlayVisible by remember { mutableStateOf(true) }
     var showChannelDrawer by remember { mutableStateOf(false) }
     var selectedAudioMode by remember { mutableStateOf("Türkçe (TR)") }
+    var playbackSpeedIndex by remember { mutableIntStateOf(0) }
     var keepScreenOn by remember { mutableStateOf(true) }
     var isFullLandscape by remember { mutableStateOf(true) }
     var resizeModeIndex by remember { mutableIntStateOf(0) }
@@ -1481,6 +1521,7 @@ fun JoeVideoPlayerScreen(
         AspectRatioFrameLayout.RESIZE_MODE_FILL to "Tam Ekran",
         AspectRatioFrameLayout.RESIZE_MODE_ZOOM to "Yakınlaştır"
     )
+    val speedOptions = listOf(1.0f to "1.0x", 1.25f to "1.25x", 1.5f to "1.5x")
 
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
@@ -1540,6 +1581,7 @@ fun JoeVideoPlayerScreen(
             streamUrl
         }
         exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
+        exoPlayer.playbackParameters = PlaybackParameters(speedOptions[playbackSpeedIndex].first)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
 
@@ -1559,6 +1601,10 @@ fun JoeVideoPlayerScreen(
                 }
             }
         })
+    }
+
+    LaunchedEffect(playbackSpeedIndex) {
+        exoPlayer.playbackParameters = PlaybackParameters(speedOptions[playbackSpeedIndex].first)
     }
 
     LaunchedEffect(selectedAudioMode) {
@@ -1611,6 +1657,7 @@ fun JoeVideoPlayerScreen(
     val audioTracks = listOf("Türkçe (TR)", "Orijinal", "Türkçe Altyazı")
     val currentResizeMode = resizeModes[resizeModeIndex].first
     val currentResizeLabel = resizeModes[resizeModeIndex].second
+    val currentSpeedLabel = speedOptions[playbackSpeedIndex].second
 
     Box(
         modifier = Modifier
@@ -1751,6 +1798,32 @@ fun JoeVideoPlayerScreen(
                                 .background(JoeColors.CardDark.copy(alpha = 0.9f))
                                 .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(10.dp))
                                 .clickable {
+                                    playbackSpeedIndex = (playbackSpeedIndex + 1) % speedOptions.size
+                                }
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Speed,
+                                contentDescription = "Hız",
+                                tint = JoeColors.RedBright,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = currentSpeedLabel,
+                                color = JoeColors.TextPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(JoeColors.CardDark.copy(alpha = 0.9f))
+                                .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(10.dp))
+                                .clickable {
                                     resizeModeIndex = (resizeModeIndex + 1) % resizeModes.size
                                 }
                                 .padding(horizontal = 10.dp, vertical = 6.dp)
@@ -1831,6 +1904,51 @@ fun JoeVideoPlayerScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    if (session.episodes.size > 1) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    onSelectEpisode(
+                                        session.currentEpisodeIndex - 1,
+                                        currentChannel,
+                                        session.episodes
+                                    )
+                                },
+                                enabled = hasPrevEpisode,
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Icon(imageVector = Icons.Rounded.SkipPrevious, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Önceki Bölüm", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+
+                            Button(
+                                onClick = {
+                                    onSelectEpisode(
+                                        session.currentEpisodeIndex + 1,
+                                        currentChannel,
+                                        session.episodes
+                                    )
+                                },
+                                enabled = hasNextEpisode,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = JoeColors.RedPrimary,
+                                    contentColor = JoeColors.TextPrimary
+                                ),
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("Sonraki Bölüm", fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(imageVector = Icons.Rounded.SkipNext, contentDescription = null)
+                            }
+                        }
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1862,7 +1980,7 @@ fun JoeVideoPlayerScreen(
                         }
                     }
 
-                    if (channels.isNotEmpty()) {
+                    if (channels.isNotEmpty() && session.episodes.isEmpty()) {
                         Button(
                             onClick = { showChannelDrawer = !showChannelDrawer },
                             colors = ButtonDefaults.buttonColors(
