@@ -1,5 +1,6 @@
 package com.joe.player
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.pm.ActivityInfo
@@ -9,6 +10,12 @@ import android.os.Bundle
 import android.util.LruCache
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -29,6 +36,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -44,7 +53,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,6 +78,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -216,6 +228,7 @@ enum class JoeTab(val label: String, val icon: ImageVector) {
     LIVE("Canlı TV", Icons.Rounded.LiveTv),
     MOVIES("Filmler", Icons.Rounded.Movie),
     SERIES("Diziler", Icons.Rounded.Tv),
+    BROWSER("Tarayıcı", Icons.Rounded.Language),
     PLAYLISTS("Listeler", Icons.Rounded.PlaylistPlay)
 }
 
@@ -843,7 +856,7 @@ fun JoeMainScreen() {
                 JoeTab.LIVE -> MediaCategory.LIVE
                 JoeTab.MOVIES -> MediaCategory.MOVIE
                 JoeTab.SERIES -> MediaCategory.SERIES
-                JoeTab.PLAYLISTS -> null
+                JoeTab.BROWSER, JoeTab.PLAYLISTS -> null
             }
             if (targetCat == null) {
                 emptyList()
@@ -1007,13 +1020,15 @@ fun JoeMainScreen() {
     Scaffold(
         containerColor = JoeColors.BackgroundDark,
         topBar = {
-            JoeTopBar(
-                activePlaylistName = activePlaylist?.name,
-                isRefreshing = isRefreshing,
-                onRefreshClick = {
-                    activePlaylist?.let { refreshPlaylist(it) }
-                }
-            )
+            if (selectedTab != JoeTab.BROWSER) {
+                JoeTopBar(
+                    activePlaylistName = activePlaylist?.name,
+                    isRefreshing = isRefreshing,
+                    onRefreshClick = {
+                        activePlaylist?.let { refreshPlaylist(it) }
+                    }
+                )
+            }
         },
         bottomBar = {
             JoeBottomBar(
@@ -1073,7 +1088,11 @@ fun JoeMainScreen() {
                 )
             }
 
-            if (selectedTab != JoeTab.PLAYLISTS && activePlaylist != null && allTabCategories.size > 1) {
+            if (selectedTab != JoeTab.PLAYLISTS &&
+                selectedTab != JoeTab.BROWSER &&
+                activePlaylist != null &&
+                allTabCategories.size > 1
+            ) {
                 CategorySearchAndFilterSection(
                     categories = filteredCategories,
                     selectedCategory = selectedCategory,
@@ -1145,6 +1164,22 @@ fun JoeMainScreen() {
                         )
                     }
                 }
+                JoeTab.BROWSER -> {
+                    JoeLiteBrowserSection(
+                        onPlayDetectedMedia = { mediaTitle, mediaUrl ->
+                            val webItem = JoeChannelItem(
+                                id = "web_${mediaUrl.hashCode()}",
+                                title = mediaTitle.ifBlank { "Web Yayını" },
+                                subtitle = "Tarayıcı Akışı",
+                                group = "Web",
+                                streamUrl = mediaUrl,
+                                category = MediaCategory.LIVE,
+                                isLive = mediaUrl.contains(".m3u8", ignoreCase = true)
+                            )
+                            startStream(webItem, mediaUrl)
+                        }
+                    )
+                }
                 JoeTab.PLAYLISTS -> {
                     PlaylistManagementSection(
                         playlists = playlists,
@@ -1208,6 +1243,422 @@ fun JoeMainScreen() {
                 }
             )
         }
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun JoeLiteBrowserSection(
+    onPlayDetectedMedia: (String, String) -> Unit
+) {
+    val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+
+    val homeUrl = "https://www.google.com"
+    var addressText by remember { mutableStateOf(homeUrl) }
+    var currentPageTitle by remember { mutableStateOf("JOE Tarayıcı") }
+    var pageProgress by remember { mutableIntStateOf(100) }
+    var canGoBack by remember { mutableStateOf(false) }
+    var canGoForward by remember { mutableStateOf(false) }
+    var desktopMode by remember { mutableStateOf(false) }
+    var detectedStreams by remember { mutableStateOf<List<String>>(emptyList()) }
+    var showStreamsDialog by remember { mutableStateOf(false) }
+
+    val quickBookmarks = listOf(
+        "Google" to "https://www.google.com",
+        "YouTube" to "https://m.youtube.com",
+        "Canlı TV" to "https://www.google.com/search?q=canli+tv+izle",
+        "Film İzle" to "https://www.google.com/search?q=film+izle"
+    )
+
+    val blockedHosts = remember {
+        setOf(
+            "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+            "adservice.google.com", "popads.net", "popcash.net", "propellerads.com",
+            "exoclick.com", "taboola.com", "outbrain.com", "adnxs.com"
+        )
+    }
+
+    fun isMediaStreamUrl(raw: String): Boolean {
+        val lower = raw.lowercase(Locale.ROOT)
+        if (lower.startsWith("blob:") || lower.startsWith("data:")) return false
+        return lower.contains(".m3u8") ||
+            lower.contains(".mp4") ||
+            lower.contains(".mpd") ||
+            lower.contains(".ts?") ||
+            lower.endsWith(".ts") ||
+            lower.contains("playlist.m3u8") ||
+            lower.contains("master.m3u8")
+    }
+
+    val webView = remember {
+        WebView(context).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(android.graphics.Color.parseColor("#1D2E36"))
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                databaseEnabled = false
+                setSupportZoom(true)
+                builtInZoomControls = true
+                displayZoomControls = false
+                useWideViewPort = true
+                loadWithOverviewMode = true
+                mediaPlaybackRequiresUserGesture = false
+                cacheMode = WebSettings.LOAD_DEFAULT
+                mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            }
+            webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                    pageProgress = newProgress
+                }
+
+                override fun onReceivedTitle(view: WebView?, title: String?) {
+                    if (!title.isNullOrBlank()) {
+                        currentPageTitle = title
+                    }
+                }
+            }
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(
+                    view: WebView?,
+                    request: WebResourceRequest?
+                ): Boolean {
+                    val target = request?.url?.toString().orEmpty()
+                    if (target.isBlank()) return false
+                    if (!target.startsWith("http://") && !target.startsWith("https://")) {
+                        return true
+                    }
+                    addressText = target
+                    return false
+                }
+
+                override fun shouldInterceptRequest(
+                    view: WebView?,
+                    request: WebResourceRequest?
+                ): WebResourceResponse? {
+                    val reqUrl = request?.url?.toString().orEmpty()
+                    val host = request?.url?.host?.lowercase(Locale.ROOT).orEmpty()
+                    if (blockedHosts.any { host == it || host.endsWith(".$it") }) {
+                        return WebResourceResponse(
+                            "text/plain",
+                            "UTF-8",
+                            ByteArrayInputStream(ByteArray(0))
+                        )
+                    }
+                    if (isMediaStreamUrl(reqUrl)) {
+                        post {
+                            if (reqUrl !in detectedStreams) {
+                                detectedStreams = (listOf(reqUrl) + detectedStreams).take(12)
+                            }
+                        }
+                    }
+                    return super.shouldInterceptRequest(view, request)
+                }
+
+                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                    if (!url.isNullOrBlank()) {
+                        addressText = url
+                    }
+                    canGoBack = view?.canGoBack() == true
+                    canGoForward = view?.canGoForward() == true
+                }
+
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    if (!url.isNullOrBlank()) {
+                        addressText = url
+                    }
+                    canGoBack = view?.canGoBack() == true
+                    canGoForward = view?.canGoForward() == true
+                }
+            }
+            loadUrl(homeUrl)
+        }
+    }
+
+    fun navigateToInput(rawInput: String) {
+        val trimmed = rawInput.trim()
+        if (trimmed.isEmpty()) return
+        val targetUrl = when {
+            trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
+            trimmed.contains(".") && !trimmed.contains(" ") -> "https://$trimmed"
+            else -> "https://www.google.com/search?q=${URLEncoder.encode(trimmed, "UTF-8")}"
+        }
+        detectedStreams = emptyList()
+        addressText = targetUrl
+        webView.loadUrl(targetUrl)
+        focusManager.clearFocus()
+    }
+
+    BackHandler(enabled = canGoBack) {
+        webView.goBack()
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            runCatching {
+                webView.stopLoading()
+                webView.clearHistory()
+                webView.clearCache(true)
+                webView.destroy()
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(JoeColors.BackgroundDark)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(JoeColors.SurfaceDark)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            IconButton(
+                onClick = { if (webView.canGoBack()) webView.goBack() },
+                enabled = canGoBack,
+                modifier = Modifier.size(34.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ArrowBack,
+                    contentDescription = "Geri",
+                    tint = if (canGoBack) JoeColors.TextPrimary else JoeColors.TextSecondary.copy(alpha = 0.4f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            IconButton(
+                onClick = { if (webView.canGoForward()) webView.goForward() },
+                enabled = canGoForward,
+                modifier = Modifier.size(34.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ArrowForward,
+                    contentDescription = "İleri",
+                    tint = if (canGoForward) JoeColors.TextPrimary else JoeColors.TextSecondary.copy(alpha = 0.4f),
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            OutlinedTextField(
+                value = addressText,
+                onValueChange = { addressText = it },
+                singleLine = true,
+                placeholder = {
+                    Text(
+                        text = "Ara veya site adresi gir...",
+                        color = JoeColors.TextSecondary,
+                        fontSize = 12.sp,
+                        maxLines = 1
+                    )
+                },
+                trailingIcon = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (addressText.isNotEmpty()) {
+                            IconButton(
+                                onClick = { addressText = "" },
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "Temizle",
+                                    tint = JoeColors.TextSecondary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = {
+                                if (pageProgress < 100) webView.stopLoading() else webView.reload()
+                            },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (pageProgress < 100) Icons.Rounded.Close else Icons.Rounded.Refresh,
+                                contentDescription = "Yenile",
+                                tint = JoeColors.RedBright,
+                                modifier = Modifier.size(17.dp)
+                            )
+                        }
+                    }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { navigateToInput(addressText) }),
+                shape = RoundedCornerShape(20.dp),
+                textStyle = LocalTextStyle.current.copy(
+                    color = JoeColors.TextPrimary,
+                    fontSize = 13.sp
+                ),
+                modifier = Modifier.weight(1f)
+            )
+
+            IconButton(
+                onClick = {
+                    desktopMode = !desktopMode
+                    webView.settings.userAgentString = if (desktopMode) {
+                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                    } else {
+                        null
+                    }
+                    webView.reload()
+                },
+                modifier = Modifier.size(34.dp)
+            ) {
+                Icon(
+                    imageVector = if (desktopMode) Icons.Rounded.DesktopWindows else Icons.Rounded.PhoneAndroid,
+                    contentDescription = "Masaüstü/Mobil Görünüm",
+                    tint = if (desktopMode) JoeColors.RedBright else JoeColors.TextSecondary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(JoeColors.SurfaceDark)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            LazyRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(quickBookmarks) { (label, url) ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(JoeColors.CardDark)
+                            .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(14.dp))
+                            .clickable { navigateToInput(url) }
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = label,
+                            color = JoeColors.TextPrimary,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            if (detectedStreams.isNotEmpty()) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(JoeColors.RedPrimary)
+                        .clickable {
+                            if (detectedStreams.size == 1) {
+                                onPlayDetectedMedia(currentPageTitle, detectedStreams.first())
+                            } else {
+                                showStreamsDialog = true
+                            }
+                        }
+                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text(
+                            text = "Yayını Aç (${detectedStreams.size})",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        }
+
+        if (pageProgress in 1..99) {
+            LinearProgressIndicator(
+                progress = { pageProgress / 100f },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp),
+                color = JoeColors.RedBright,
+                trackColor = JoeColors.SurfaceDark
+            )
+        }
+
+        AndroidView(
+            factory = { webView },
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+        )
+    }
+
+    if (showStreamsDialog && detectedStreams.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { showStreamsDialog = false },
+            containerColor = JoeColors.CardDark,
+            titleContentColor = JoeColors.TextPrimary,
+            title = {
+                Text("Yakalanan Video Akışları", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 260.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    detectedStreams.forEachIndexed { idx, streamLink ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(JoeColors.SurfaceDark)
+                                .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(8.dp))
+                                .clickable {
+                                    showStreamsDialog = false
+                                    onPlayDetectedMedia(currentPageTitle, streamLink)
+                                }
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "${idx + 1}. $streamLink",
+                                color = JoeColors.TextPrimary,
+                                fontSize = 11.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                imageVector = Icons.Rounded.PlayArrow,
+                                contentDescription = "Oynat",
+                                tint = JoeColors.RedBright,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showStreamsDialog = false }) {
+                    Text("Kapat", color = JoeColors.TextSecondary)
+                }
+            }
+        )
     }
 }
 
@@ -2292,6 +2743,7 @@ private fun JoeBottomBar(
                     Text(
                         text = tab.label,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                        fontSize = 11.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
