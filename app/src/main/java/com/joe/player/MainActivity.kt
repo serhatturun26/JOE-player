@@ -240,6 +240,100 @@ enum class JoeTab(val label: String, val icon: ImageVector) {
     PLAYLISTS("Listeler", Icons.Rounded.PlaylistPlay)
 }
 
+data class BrowserBookmark(
+    val title: String,
+    val url: String
+)
+
+data class BrowserHistoryEntry(
+    val title: String,
+    val url: String,
+    val visitedAt: String
+)
+
+object JoeBrowserStorage {
+    private const val PREFS_NAME = "joe_browser_prefs"
+    private const val KEY_BOOKMARKS = "bookmarks_json"
+    private const val KEY_HISTORY = "history_json"
+
+    private val defaultBookmarks = listOf(
+        BrowserBookmark("Google", "https://www.google.com"),
+        BrowserBookmark("YouTube", "https://m.youtube.com"),
+        BrowserBookmark("Canlı TV", "https://www.google.com/search?q=canli+tv+izle"),
+        BrowserBookmark("Film İzle", "https://www.google.com/search?q=film+izle")
+    )
+
+    fun loadBookmarks(context: Context): List<BrowserBookmark> {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_BOOKMARKS, null) ?: return defaultBookmarks
+        val list = mutableListOf<BrowserBookmark>()
+        runCatching {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val url = obj.optString("url", "").trim()
+                val title = obj.optString("title", url).trim().ifBlank { url }
+                if (url.isNotEmpty()) {
+                    list.add(BrowserBookmark(title = title, url = url))
+                }
+            }
+        }
+        return if (list.isEmpty()) defaultBookmarks else list
+    }
+
+    fun saveBookmarks(context: Context, bookmarks: List<BrowserBookmark>) {
+        val arr = JSONArray()
+        bookmarks.forEach { bm ->
+            arr.put(
+                JSONObject().apply {
+                    put("title", bm.title)
+                    put("url", bm.url)
+                }
+            )
+        }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_BOOKMARKS, arr.toString())
+            .apply()
+    }
+
+    fun loadHistory(context: Context): List<BrowserHistoryEntry> {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val raw = prefs.getString(KEY_HISTORY, null) ?: return emptyList()
+        val list = mutableListOf<BrowserHistoryEntry>()
+        runCatching {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val url = obj.optString("url", "").trim()
+                val title = obj.optString("title", url).trim().ifBlank { url }
+                val visitedAt = obj.optString("visitedAt", "")
+                if (url.isNotEmpty()) {
+                    list.add(BrowserHistoryEntry(title = title, url = url, visitedAt = visitedAt))
+                }
+            }
+        }
+        return list
+    }
+
+    fun saveHistory(context: Context, history: List<BrowserHistoryEntry>) {
+        val arr = JSONArray()
+        history.take(80).forEach { entry ->
+            arr.put(
+                JSONObject().apply {
+                    put("title", entry.title)
+                    put("url", entry.url)
+                    put("visitedAt", entry.visitedAt)
+                }
+            )
+        }
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_HISTORY, arr.toString())
+            .apply()
+    }
+}
+
 object JoePlaylistStorage {
     private const val PREFS_NAME = "joe_player_prefs"
     private const val KEY_PLAYLISTS = "saved_playlists_json"
@@ -1316,15 +1410,13 @@ private fun JoeLiteBrowserSection(
     var desktopMode by remember { mutableStateOf(false) }
     var detectedStreams by remember { mutableStateOf<List<String>>(emptyList()) }
     var showStreamsDialog by remember { mutableStateOf(false) }
+    var showBookmarksDialog by remember { mutableStateOf(false) }
+    var showHistoryDialog by remember { mutableStateOf(false) }
     var customFullscreenView by remember { mutableStateOf<View?>(null) }
     var customFullscreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
-    val quickBookmarks = listOf(
-        "Google" to "https://www.google.com",
-        "YouTube" to "https://m.youtube.com",
-        "Canlı TV" to "https://www.google.com/search?q=canli+tv+izle",
-        "Film İzle" to "https://www.google.com/search?q=film+izle"
-    )
+    var bookmarks by remember { mutableStateOf(JoeBrowserStorage.loadBookmarks(context)) }
+    var history by remember { mutableStateOf(JoeBrowserStorage.loadHistory(context)) }
 
     val blockedHosts = remember {
         setOf(
@@ -1347,6 +1439,34 @@ private fun JoeLiteBrowserSection(
             lower.contains(".mpd") ||
             lower.contains("playlist.m3u8") ||
             lower.contains("master.m3u8")
+    }
+
+    fun recordHistory(title: String, url: String) {
+        if (url.isBlank() || url == "about:blank") return
+        val stamp = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        val cleanTitle = title.trim().ifBlank { url }
+        val filtered = history.filterNot { it.url == url }
+        val updated = (listOf(BrowserHistoryEntry(title = cleanTitle, url = url, visitedAt = stamp)) + filtered)
+            .take(80)
+        history = updated
+        JoeBrowserStorage.saveHistory(context, updated)
+    }
+
+    fun toggleCurrentBookmark() {
+        val targetUrl = currentPageUrl.trim()
+        if (targetUrl.isEmpty()) return
+        val exists = bookmarks.any { it.url.equals(targetUrl, ignoreCase = true) }
+        val updated = if (exists) {
+            bookmarks.filterNot { it.url.equals(targetUrl, ignoreCase = true) }
+        } else {
+            val shortTitle = currentPageTitle.trim()
+                .takeIf { it.isNotBlank() && it != "JOE Tarayıcı" }
+                ?.take(22)
+                ?: UriHostOrTitle(targetUrl)
+            listOf(BrowserBookmark(title = shortTitle, url = targetUrl)) + bookmarks
+        }
+        bookmarks = updated
+        JoeBrowserStorage.saveBookmarks(context, updated)
     }
 
     fun exitWebFullscreen() {
@@ -1415,6 +1535,8 @@ private fun JoeLiteBrowserSection(
                 override fun onReceivedTitle(view: WebView?, title: String?) {
                     if (!title.isNullOrBlank()) {
                         currentPageTitle = title
+                        val activeUrl = view?.url ?: currentPageUrl
+                        recordHistory(title, activeUrl)
                     }
                 }
 
@@ -1486,6 +1608,7 @@ private fun JoeLiteBrowserSection(
                     if (!url.isNullOrBlank()) {
                         addressText = url
                         currentPageUrl = url
+                        recordHistory(view?.title ?: currentPageTitle, url)
                     }
                     canGoBack = view?.canGoBack() == true
                     canGoForward = view?.canGoForward() == true
@@ -1546,6 +1669,8 @@ private fun JoeLiteBrowserSection(
             }
         }
     }
+
+    val isBookmarked = bookmarks.any { it.url.equals(currentPageUrl.trim(), ignoreCase = true) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -1652,6 +1777,30 @@ private fun JoeLiteBrowserSection(
                 )
 
                 IconButton(
+                    onClick = { toggleCurrentBookmark() },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isBookmarked) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkAdd,
+                        contentDescription = "Yer İmi",
+                        tint = if (isBookmarked) JoeColors.RedBright else JoeColors.TextSecondary,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+
+                IconButton(
+                    onClick = { showHistoryDialog = true },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.History,
+                        contentDescription = "Geçmiş",
+                        tint = JoeColors.TextSecondary,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+
+                IconButton(
                     onClick = {
                         desktopMode = !desktopMode
                         webView.settings.userAgentString = if (desktopMode) {
@@ -1661,13 +1810,13 @@ private fun JoeLiteBrowserSection(
                         }
                         webView.reload()
                     },
-                    modifier = Modifier.size(34.dp)
+                    modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
                         imageVector = if (desktopMode) Icons.Rounded.DesktopWindows else Icons.Rounded.PhoneAndroid,
                         contentDescription = "Masaüstü/Mobil Görünüm",
                         tint = if (desktopMode) JoeColors.RedBright else JoeColors.TextSecondary,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
@@ -1684,20 +1833,48 @@ private fun JoeLiteBrowserSection(
                     modifier = Modifier.weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    items(quickBookmarks) { (label, url) ->
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(JoeColors.RedPrimary.copy(alpha = 0.25f))
+                                .border(1.dp, JoeColors.RedBright, RoundedCornerShape(14.dp))
+                                .clickable { showBookmarksDialog = true }
+                                .padding(horizontal = 9.dp, vertical = 4.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Bookmarks,
+                                    contentDescription = null,
+                                    tint = JoeColors.RedBright,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Yer İmleri (${bookmarks.size})",
+                                    color = JoeColors.RedBright,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    items(bookmarks) { bm ->
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(14.dp))
                                 .background(JoeColors.CardDark)
                                 .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(14.dp))
-                                .clickable { navigateToInput(url) }
+                                .clickable { navigateToInput(bm.url) }
                                 .padding(horizontal = 10.dp, vertical = 4.dp)
                         ) {
                             Text(
-                                text = label,
+                                text = bm.title,
                                 color = JoeColors.TextPrimary,
                                 fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1
                             )
                         }
                     }
@@ -1786,6 +1963,200 @@ private fun JoeLiteBrowserSection(
         }
     }
 
+    if (showBookmarksDialog) {
+        AlertDialog(
+            onDismissRequest = { showBookmarksDialog = false },
+            containerColor = JoeColors.CardDark,
+            titleContentColor = JoeColors.TextPrimary,
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Yer İmleri", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    TextButton(onClick = { toggleCurrentBookmark() }) {
+                        Text(
+                            text = if (isBookmarked) "Sayfayı Kaldır" else "Bu Sayfayı Ekle",
+                            color = JoeColors.RedBright,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 280.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (bookmarks.isEmpty()) {
+                        Text(
+                            text = "Kayıtlı yer imi yok.",
+                            color = JoeColors.TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    } else {
+                        bookmarks.forEach { bm ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(JoeColors.SurfaceDark)
+                                    .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        showBookmarksDialog = false
+                                        navigateToInput(bm.url)
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = bm.title,
+                                        color = JoeColors.TextPrimary,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = bm.url,
+                                        color = JoeColors.TextSecondary,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        val updated = bookmarks.filterNot { it.url == bm.url }
+                                        bookmarks = updated
+                                        JoeBrowserStorage.saveBookmarks(context, updated)
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.DeleteOutline,
+                                        contentDescription = "Sil",
+                                        tint = JoeColors.TextSecondary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showBookmarksDialog = false }) {
+                    Text("Kapat", color = JoeColors.TextSecondary)
+                }
+            }
+        )
+    }
+
+    if (showHistoryDialog) {
+        AlertDialog(
+            onDismissRequest = { showHistoryDialog = false },
+            containerColor = JoeColors.CardDark,
+            titleContentColor = JoeColors.TextPrimary,
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Tarayıcı Geçmişi", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    if (history.isNotEmpty()) {
+                        TextButton(
+                            onClick = {
+                                history = emptyList()
+                                JoeBrowserStorage.saveHistory(context, emptyList())
+                            }
+                        ) {
+                            Text(
+                                text = "Temizle",
+                                color = JoeColors.RedBright,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 280.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (history.isEmpty()) {
+                        Text(
+                            text = "Henüz geçmiş kaydı yok.",
+                            color = JoeColors.TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    } else {
+                        history.forEach { entry ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(JoeColors.SurfaceDark)
+                                    .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        showHistoryDialog = false
+                                        navigateToInput(entry.url)
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = entry.title,
+                                        color = JoeColors.TextPrimary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = entry.url,
+                                        color = JoeColors.TextSecondary,
+                                        fontSize = 11.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                if (entry.visitedAt.isNotBlank()) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = entry.visitedAt,
+                                        color = JoeColors.RedBright,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHistoryDialog = false }) {
+                    Text("Kapat", color = JoeColors.TextSecondary)
+                }
+            }
+        )
+    }
+
     if (showStreamsDialog && detectedStreams.isNotEmpty()) {
         AlertDialog(
             onDismissRequest = { showStreamsDialog = false },
@@ -1842,6 +2213,12 @@ private fun JoeLiteBrowserSection(
             }
         )
     }
+}
+
+private fun UriHostOrTitle(rawUrl: String): String {
+    return runCatching {
+        URL(rawUrl).host.removePrefix("www.")
+    }.getOrDefault(rawUrl).ifBlank { "Yer İmi" }
 }
 
 @Composable
