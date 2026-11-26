@@ -1416,6 +1416,7 @@ private fun JoeLiteBrowserSection(
     var showStreamsDialog by remember { mutableStateOf(false) }
     var showBookmarksDialog by remember { mutableStateOf(false) }
     var showHistoryDialog by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
     var showFindBar by remember { mutableStateOf(false) }
     var findQuery by remember { mutableStateOf("") }
     var customFullscreenView by remember { mutableStateOf<View?>(null) }
@@ -1499,6 +1500,7 @@ private fun JoeLiteBrowserSection(
         onFullscreenChanged(isFs)
         if (isFs) {
             showFindBar = false
+            showMoreMenu = false
             activity?.let { act ->
                 val insetsController = WindowInsetsControllerCompat(act.window, act.window.decorView)
                 act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -1640,6 +1642,7 @@ private fun JoeLiteBrowserSection(
     fun navigateToInput(rawInput: String) {
         exitWebFullscreen()
         showFindBar = false
+        showMoreMenu = false
         webView.clearMatches()
         val trimmed = rawInput.trim()
         if (trimmed.isEmpty()) return
@@ -1711,6 +1714,7 @@ private fun JoeLiteBrowserSection(
                 .fillMaxSize()
                 .background(JoeColors.BackgroundDark)
         ) {
+            // 1) Sade üst adres çubuğu
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1770,31 +1774,16 @@ private fun JoeLiteBrowserSection(
                         )
                     },
                     trailingIcon = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (addressText.isNotEmpty()) {
-                                IconButton(
-                                    onClick = { addressText = "" },
-                                    modifier = Modifier.size(28.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Close,
-                                        contentDescription = "Temizle",
-                                        tint = JoeColors.TextSecondary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                }
-                            }
+                        if (addressText.isNotEmpty()) {
                             IconButton(
-                                onClick = {
-                                    if (pageProgress < 100) webView.stopLoading() else webView.reload()
-                                },
+                                onClick = { addressText = "" },
                                 modifier = Modifier.size(28.dp)
                             ) {
                                 Icon(
-                                    imageVector = if (pageProgress < 100) Icons.Rounded.Close else Icons.Rounded.Refresh,
-                                    contentDescription = "Yenile",
-                                    tint = JoeColors.RedBright,
-                                    modifier = Modifier.size(17.dp)
+                                    imageVector = Icons.Rounded.Close,
+                                    contentDescription = "Temizle",
+                                    tint = JoeColors.TextSecondary,
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
                         }
@@ -1810,48 +1799,29 @@ private fun JoeLiteBrowserSection(
                 )
 
                 IconButton(
-                    onClick = { toggleCurrentBookmark() },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = if (isBookmarked) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkAdd,
-                        contentDescription = "Yer İmi",
-                        tint = if (isBookmarked) JoeColors.RedBright else JoeColors.TextSecondary,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
-
-                IconButton(
-                    onClick = { showHistoryDialog = true },
-                    modifier = Modifier.size(32.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.History,
-                        contentDescription = "Geçmiş",
-                        tint = JoeColors.TextSecondary,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
-
-                IconButton(
                     onClick = {
-                        desktopMode = !desktopMode
-                        webView.settings.userAgentString = if (desktopMode) {
-                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                        } else {
-                            null
-                        }
-                        webView.reload()
+                        if (pageProgress < 100) webView.stopLoading() else webView.reload()
                     },
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(34.dp)
                 ) {
                     Icon(
-                        imageVector = if (desktopMode) Icons.Rounded.DesktopWindows else Icons.Rounded.PhoneAndroid,
-                        contentDescription = "Masaüstü/Mobil Görünüm",
-                        tint = if (desktopMode) JoeColors.RedBright else JoeColors.TextSecondary,
+                        imageVector = if (pageProgress < 100) Icons.Rounded.Close else Icons.Rounded.Refresh,
+                        contentDescription = "Yenile",
+                        tint = JoeColors.RedBright,
                         modifier = Modifier.size(19.dp)
                     )
                 }
+            }
+
+            if (pageProgress in 1..99) {
+                LinearProgressIndicator(
+                    progress = { pageProgress / 100f },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp),
+                    color = JoeColors.RedBright,
+                    trackColor = JoeColors.SurfaceDark
+                )
             }
 
             if (showFindBar) {
@@ -1928,134 +1898,52 @@ private fun JoeLiteBrowserSection(
                 }
             }
 
+            // 2) Sayfa alanı
+            AndroidView(
+                factory = { webView },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            )
+
+            // 3) Düzenli alt aksiyon şeridi (yer imleri + hızlı kısayollar + yakalanan yayın + tek menü)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(JoeColors.SurfaceDark)
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(JoeColors.RedPrimary.copy(alpha = 0.25f))
+                        .border(1.dp, JoeColors.RedBright, RoundedCornerShape(14.dp))
+                        .clickable { showBookmarksDialog = true }
+                        .padding(horizontal = 9.dp, vertical = 4.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Rounded.Bookmarks,
+                            contentDescription = null,
+                            tint = JoeColors.RedBright,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Yer İmleri (${bookmarks.size})",
+                            color = JoeColors.RedBright,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
                 LazyRow(
                     modifier = Modifier.weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(JoeColors.RedPrimary.copy(alpha = 0.25f))
-                                .border(1.dp, JoeColors.RedBright, RoundedCornerShape(14.dp))
-                                .clickable { showBookmarksDialog = true }
-                                .padding(horizontal = 9.dp, vertical = 4.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Bookmarks,
-                                    contentDescription = null,
-                                    tint = JoeColors.RedBright,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "Yer İmleri (${bookmarks.size})",
-                                    color = JoeColors.RedBright,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(if (showFindBar) JoeColors.RedPrimary else JoeColors.CardDark)
-                                .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(14.dp))
-                                .clickable {
-                                    showFindBar = !showFindBar
-                                    if (!showFindBar) {
-                                        findQuery = ""
-                                        webView.clearMatches()
-                                    } else if (findQuery.isNotBlank()) {
-                                        webView.findAllAsync(findQuery)
-                                    }
-                                }
-                                .padding(horizontal = 9.dp, vertical = 4.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Search,
-                                    contentDescription = null,
-                                    tint = JoeColors.TextPrimary,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text(
-                                    text = "Bul",
-                                    color = JoeColors.TextPrimary,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(JoeColors.CardDark)
-                                .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(14.dp))
-                                .clickable { copyCurrentUrl() }
-                                .padding(horizontal = 9.dp, vertical = 4.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Rounded.ContentCopy,
-                                    contentDescription = null,
-                                    tint = JoeColors.TextPrimary,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text(
-                                    text = "Kopyala",
-                                    color = JoeColors.TextPrimary,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(JoeColors.CardDark)
-                                .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(14.dp))
-                                .clickable { shareCurrentUrl() }
-                                .padding(horizontal = 9.dp, vertical = 4.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Share,
-                                    contentDescription = null,
-                                    tint = JoeColors.TextPrimary,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text(
-                                    text = "Paylaş",
-                                    color = JoeColors.TextPrimary,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-
                     items(bookmarks) { bm ->
                         Box(
                             modifier = Modifier
@@ -2077,7 +1965,6 @@ private fun JoeLiteBrowserSection(
                 }
 
                 if (detectedStreams.isNotEmpty()) {
-                    Spacer(modifier = Modifier.width(6.dp))
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(14.dp))
@@ -2089,18 +1976,17 @@ private fun JoeLiteBrowserSection(
                                     showStreamsDialog = true
                                 }
                             }
-                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 imageVector = Icons.Rounded.PlayArrow,
                                 contentDescription = null,
                                 tint = Color.White,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(15.dp)
                             )
-                            Spacer(modifier = Modifier.width(2.dp))
                             Text(
-                                text = "Yayını Aç (${detectedStreams.size})",
+                                text = "(${detectedStreams.size})",
                                 color = Color.White,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
@@ -2108,25 +1994,144 @@ private fun JoeLiteBrowserSection(
                         }
                     }
                 }
-            }
 
-            if (pageProgress in 1..99) {
-                LinearProgressIndicator(
-                    progress = { pageProgress / 100f },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(2.dp),
-                    color = JoeColors.RedBright,
-                    trackColor = JoeColors.SurfaceDark
-                )
-            }
+                Box {
+                    IconButton(
+                        onClick = { showMoreMenu = true },
+                        modifier = Modifier.size(30.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.MoreVert,
+                            contentDescription = "Menü",
+                            tint = JoeColors.TextPrimary,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
 
-            AndroidView(
-                factory = { webView },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            )
+                    DropdownMenu(
+                        expanded = showMoreMenu,
+                        onDismissRequest = { showMoreMenu = false },
+                        containerColor = JoeColors.CardDark
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = if (isBookmarked) "Yer İmlerinden Kaldır" else "Yer İmlerine Ekle",
+                                    color = JoeColors.TextPrimary,
+                                    fontSize = 13.sp
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (isBookmarked) Icons.Rounded.BookmarkRemove else Icons.Rounded.BookmarkAdd,
+                                    contentDescription = null,
+                                    tint = JoeColors.RedBright
+                                )
+                            },
+                            onClick = {
+                                showMoreMenu = false
+                                toggleCurrentBookmark()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text("Geçmiş (${history.size})", color = JoeColors.TextPrimary, fontSize = 13.sp)
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Rounded.History,
+                                    contentDescription = null,
+                                    tint = JoeColors.RedBright
+                                )
+                            },
+                            onClick = {
+                                showMoreMenu = false
+                                showHistoryDialog = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text("Sayfada Bul", color = JoeColors.TextPrimary, fontSize = 13.sp)
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Rounded.Search,
+                                    contentDescription = null,
+                                    tint = JoeColors.RedBright
+                                )
+                            },
+                            onClick = {
+                                showMoreMenu = false
+                                showFindBar = !showFindBar
+                                if (!showFindBar) {
+                                    findQuery = ""
+                                    webView.clearMatches()
+                                } else if (findQuery.isNotBlank()) {
+                                    webView.findAllAsync(findQuery)
+                                }
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text("Bağlantıyı Kopyala", color = JoeColors.TextPrimary, fontSize = 13.sp)
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Rounded.ContentCopy,
+                                    contentDescription = null,
+                                    tint = JoeColors.RedBright
+                                )
+                            },
+                            onClick = {
+                                showMoreMenu = false
+                                copyCurrentUrl()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text("Paylaş", color = JoeColors.TextPrimary, fontSize = 13.sp)
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Rounded.Share,
+                                    contentDescription = null,
+                                    tint = JoeColors.RedBright
+                                )
+                            },
+                            onClick = {
+                                showMoreMenu = false
+                                shareCurrentUrl()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = if (desktopMode) "Mobil Görünüm: Açık" else "Masaüstü Görünüm: Kapalı",
+                                    color = if (desktopMode) JoeColors.RedBright else JoeColors.TextPrimary,
+                                    fontSize = 13.sp
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = if (desktopMode) Icons.Rounded.DesktopWindows else Icons.Rounded.PhoneAndroid,
+                                    contentDescription = null,
+                                    tint = if (desktopMode) JoeColors.RedBright else JoeColors.TextSecondary
+                                )
+                            },
+                            onClick = {
+                                showMoreMenu = false
+                                desktopMode = !desktopMode
+                                webView.settings.userAgentString = if (desktopMode) {
+                                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                                } else {
+                                    null
+                                }
+                                webView.reload()
+                            }
+                        )
+                    }
+                }
+            }
         }
 
         customFullscreenView?.let { fsView ->
