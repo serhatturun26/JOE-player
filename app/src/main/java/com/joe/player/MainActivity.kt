@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.util.LruCache
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
@@ -1284,6 +1285,7 @@ private fun JoeLiteBrowserSection(
     ) -> Unit
 ) {
     val context = LocalContext.current
+    val activity = context as? Activity
     val focusManager = LocalFocusManager.current
 
     val homeUrl = "https://www.google.com"
@@ -1296,6 +1298,8 @@ private fun JoeLiteBrowserSection(
     var desktopMode by remember { mutableStateOf(false) }
     var detectedStreams by remember { mutableStateOf<List<String>>(emptyList()) }
     var showStreamsDialog by remember { mutableStateOf(false) }
+    var customFullscreenView by remember { mutableStateOf<View?>(null) }
+    var customFullscreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
     val quickBookmarks = listOf(
         "Google" to "https://www.google.com",
@@ -1325,6 +1329,37 @@ private fun JoeLiteBrowserSection(
             lower.contains(".mpd") ||
             lower.contains("playlist.m3u8") ||
             lower.contains("master.m3u8")
+    }
+
+    fun exitWebFullscreen() {
+        val viewToRemove = customFullscreenView
+        val cb = customFullscreenCallback
+        customFullscreenView = null
+        customFullscreenCallback = null
+        if (viewToRemove != null) {
+            (viewToRemove.parent as? ViewGroup)?.removeView(viewToRemove)
+        }
+        runCatching { cb?.onCustomViewHidden() }
+        activity?.let { act ->
+            act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            WindowCompat.setDecorFitsSystemWindows(act.window, true)
+            WindowInsetsControllerCompat(act.window, act.window.decorView).show(
+                WindowInsetsCompat.Type.systemBars()
+            )
+        }
+    }
+
+    LaunchedEffect(customFullscreenView) {
+        if (customFullscreenView != null) {
+            activity?.let { act ->
+                val insetsController = WindowInsetsControllerCompat(act.window, act.window.decorView)
+                act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                WindowCompat.setDecorFitsSystemWindows(act.window, false)
+                insetsController.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                insetsController.hide(WindowInsetsCompat.Type.systemBars())
+            }
+        }
     }
 
     val webView = remember {
@@ -1360,6 +1395,23 @@ private fun JoeLiteBrowserSection(
                     if (!title.isNullOrBlank()) {
                         currentPageTitle = title
                     }
+                }
+
+                override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                    if (view == null) {
+                        callback?.onCustomViewHidden()
+                        return
+                    }
+                    if (customFullscreenView != null) {
+                        callback?.onCustomViewHidden()
+                        return
+                    }
+                    customFullscreenView = view
+                    customFullscreenCallback = callback
+                }
+
+                override fun onHideCustomView() {
+                    exitWebFullscreen()
                 }
             }
             webViewClient = object : WebViewClient() {
@@ -1423,6 +1475,7 @@ private fun JoeLiteBrowserSection(
     }
 
     fun launchStreamWithHeaders(streamUrl: String) {
+        exitWebFullscreen()
         val activeUrl = webView.url?.takeIf { it.isNotBlank() } ?: currentPageUrl
         val activeUa = webView.settings.userAgentString.orEmpty()
         val cookies = runCatching {
@@ -1434,6 +1487,7 @@ private fun JoeLiteBrowserSection(
     }
 
     fun navigateToInput(rawInput: String) {
+        exitWebFullscreen()
         val trimmed = rawInput.trim()
         if (trimmed.isEmpty()) return
         val targetUrl = when {
@@ -1448,8 +1502,10 @@ private fun JoeLiteBrowserSection(
         focusManager.clearFocus()
     }
 
-    BackHandler(enabled = canGoBack || webView.canGoBack()) {
-        if (webView.canGoBack()) {
+    BackHandler(enabled = customFullscreenView != null || canGoBack || webView.canGoBack()) {
+        if (customFullscreenView != null) {
+            exitWebFullscreen()
+        } else if (webView.canGoBack()) {
             webView.goBack()
             canGoBack = webView.canGoBack()
             canGoForward = webView.canGoForward()
@@ -1460,6 +1516,7 @@ private fun JoeLiteBrowserSection(
 
     DisposableEffect(Unit) {
         onDispose {
+            exitWebFullscreen()
             runCatching {
                 webView.stopLoading()
                 webView.clearHistory()
@@ -1469,212 +1526,243 @@ private fun JoeLiteBrowserSection(
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(JoeColors.BackgroundDark)
-    ) {
-        Row(
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .background(JoeColors.SurfaceDark)
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                .fillMaxSize()
+                .background(JoeColors.BackgroundDark)
         ) {
-            IconButton(
-                onClick = {
-                    if (webView.canGoBack()) {
-                        webView.goBack()
-                        canGoBack = webView.canGoBack()
-                        canGoForward = webView.canGoForward()
-                    }
-                },
-                enabled = canGoBack || webView.canGoBack(),
-                modifier = Modifier.size(34.dp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(JoeColors.SurfaceDark)
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.ArrowBack,
-                    contentDescription = "Geri",
-                    tint = if (canGoBack || webView.canGoBack()) JoeColors.TextPrimary else JoeColors.TextSecondary.copy(alpha = 0.4f),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            IconButton(
-                onClick = {
-                    if (webView.canGoForward()) {
-                        webView.goForward()
-                        canGoBack = webView.canGoBack()
-                        canGoForward = webView.canGoForward()
-                    }
-                },
-                enabled = canGoForward || webView.canGoForward(),
-                modifier = Modifier.size(34.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.ArrowForward,
-                    contentDescription = "İleri",
-                    tint = if (canGoForward || webView.canGoForward()) JoeColors.TextPrimary else JoeColors.TextSecondary.copy(alpha = 0.4f),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            OutlinedTextField(
-                value = addressText,
-                onValueChange = { addressText = it },
-                singleLine = true,
-                placeholder = {
-                    Text(
-                        text = "Ara veya site adresi gir...",
-                        color = JoeColors.TextSecondary,
-                        fontSize = 12.sp,
-                        maxLines = 1
+                IconButton(
+                    onClick = {
+                        if (webView.canGoBack()) {
+                            webView.goBack()
+                            canGoBack = webView.canGoBack()
+                            canGoForward = webView.canGoForward()
+                        }
+                    },
+                    enabled = canGoBack || webView.canGoBack(),
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.ArrowBack,
+                        contentDescription = "Geri",
+                        tint = if (canGoBack || webView.canGoBack()) JoeColors.TextPrimary else JoeColors.TextSecondary.copy(alpha = 0.4f),
+                        modifier = Modifier.size(20.dp)
                     )
-                },
-                trailingIcon = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (addressText.isNotEmpty()) {
+                }
+
+                IconButton(
+                    onClick = {
+                        if (webView.canGoForward()) {
+                            webView.goForward()
+                            canGoBack = webView.canGoBack()
+                            canGoForward = webView.canGoForward()
+                        }
+                    },
+                    enabled = canGoForward || webView.canGoForward(),
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.ArrowForward,
+                        contentDescription = "İleri",
+                        tint = if (canGoForward || webView.canGoForward()) JoeColors.TextPrimary else JoeColors.TextSecondary.copy(alpha = 0.4f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                OutlinedTextField(
+                    value = addressText,
+                    onValueChange = { addressText = it },
+                    singleLine = true,
+                    placeholder = {
+                        Text(
+                            text = "Ara veya site adresi gir...",
+                            color = JoeColors.TextSecondary,
+                            fontSize = 12.sp,
+                            maxLines = 1
+                        )
+                    },
+                    trailingIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (addressText.isNotEmpty()) {
+                                IconButton(
+                                    onClick = { addressText = "" },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Temizle",
+                                        tint = JoeColors.TextSecondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
                             IconButton(
-                                onClick = { addressText = "" },
+                                onClick = {
+                                    if (pageProgress < 100) webView.stopLoading() else webView.reload()
+                                },
                                 modifier = Modifier.size(28.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Rounded.Close,
-                                    contentDescription = "Temizle",
-                                    tint = JoeColors.TextSecondary,
-                                    modifier = Modifier.size(16.dp)
+                                    imageVector = if (pageProgress < 100) Icons.Rounded.Close else Icons.Rounded.Refresh,
+                                    contentDescription = "Yenile",
+                                    tint = JoeColors.RedBright,
+                                    modifier = Modifier.size(17.dp)
                                 )
                             }
                         }
-                        IconButton(
-                            onClick = {
-                                if (pageProgress < 100) webView.stopLoading() else webView.reload()
-                            },
-                            modifier = Modifier.size(28.dp)
+                    },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { navigateToInput(addressText) }),
+                    shape = RoundedCornerShape(20.dp),
+                    textStyle = LocalTextStyle.current.copy(
+                        color = JoeColors.TextPrimary,
+                        fontSize = 13.sp
+                    ),
+                    modifier = Modifier.weight(1f)
+                )
+
+                IconButton(
+                    onClick = {
+                        desktopMode = !desktopMode
+                        webView.settings.userAgentString = if (desktopMode) {
+                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                        } else {
+                            null
+                        }
+                        webView.reload()
+                    },
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Icon(
+                        imageVector = if (desktopMode) Icons.Rounded.DesktopWindows else Icons.Rounded.PhoneAndroid,
+                        contentDescription = "Masaüstü/Mobil Görünüm",
+                        tint = if (desktopMode) JoeColors.RedBright else JoeColors.TextSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(JoeColors.SurfaceDark)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                LazyRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(quickBookmarks) { (label, url) ->
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(JoeColors.CardDark)
+                                .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(14.dp))
+                                .clickable { navigateToInput(url) }
+                                .padding(horizontal = 10.dp, vertical = 4.dp)
                         ) {
-                            Icon(
-                                imageVector = if (pageProgress < 100) Icons.Rounded.Close else Icons.Rounded.Refresh,
-                                contentDescription = "Yenile",
-                                tint = JoeColors.RedBright,
-                                modifier = Modifier.size(17.dp)
+                            Text(
+                                text = label,
+                                color = JoeColors.TextPrimary,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                keyboardActions = KeyboardActions(onGo = { navigateToInput(addressText) }),
-                shape = RoundedCornerShape(20.dp),
-                textStyle = LocalTextStyle.current.copy(
-                    color = JoeColors.TextPrimary,
-                    fontSize = 13.sp
-                ),
-                modifier = Modifier.weight(1f)
-            )
+                }
 
-            IconButton(
-                onClick = {
-                    desktopMode = !desktopMode
-                    webView.settings.userAgentString = if (desktopMode) {
-                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                    } else {
-                        null
-                    }
-                    webView.reload()
-                },
-                modifier = Modifier.size(34.dp)
-            ) {
-                Icon(
-                    imageVector = if (desktopMode) Icons.Rounded.DesktopWindows else Icons.Rounded.PhoneAndroid,
-                    contentDescription = "Masaüstü/Mobil Görünüm",
-                    tint = if (desktopMode) JoeColors.RedBright else JoeColors.TextSecondary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(JoeColors.SurfaceDark)
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            LazyRow(
-                modifier = Modifier.weight(1f),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(quickBookmarks) { (label, url) ->
+                if (detectedStreams.isNotEmpty()) {
+                    Spacer(modifier = Modifier.width(6.dp))
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(14.dp))
-                            .background(JoeColors.CardDark)
-                            .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(14.dp))
-                            .clickable { navigateToInput(url) }
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = label,
-                            color = JoeColors.TextPrimary,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-            }
-
-            if (detectedStreams.isNotEmpty()) {
-                Spacer(modifier = Modifier.width(6.dp))
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(JoeColors.RedPrimary)
-                        .clickable {
-                            if (detectedStreams.size == 1) {
-                                launchStreamWithHeaders(detectedStreams.first())
-                            } else {
-                                showStreamsDialog = true
+                            .background(JoeColors.RedPrimary)
+                            .clickable {
+                                if (detectedStreams.size == 1) {
+                                    launchStreamWithHeaders(detectedStreams.first())
+                                } else {
+                                    showStreamsDialog = true
+                                }
                             }
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Rounded.PlayArrow,
+                                contentDescription = null,
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Text(
+                                text = "Yayını Aç (${detectedStreams.size})",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Rounded.PlayArrow,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(2.dp))
-                        Text(
-                            text = "Yayını Aç (${detectedStreams.size})",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
                     }
                 }
             }
-        }
 
-        if (pageProgress in 1..99) {
-            LinearProgressIndicator(
-                progress = { pageProgress / 100f },
+            if (pageProgress in 1..99) {
+                LinearProgressIndicator(
+                    progress = { pageProgress / 100f },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp),
+                    color = JoeColors.RedBright,
+                    trackColor = JoeColors.SurfaceDark
+                )
+            }
+
+            AndroidView(
+                factory = { webView },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(2.dp),
-                color = JoeColors.RedBright,
-                trackColor = JoeColors.SurfaceDark
+                    .weight(1f)
             )
         }
 
-        AndroidView(
-            factory = { webView },
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-        )
+        customFullscreenView?.let { fsView ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black)
+            ) {
+                AndroidView(
+                    factory = {
+                        FrameLayout(it).apply {
+                            layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                            setBackgroundColor(android.graphics.Color.BLACK)
+                            (fsView.parent as? ViewGroup)?.removeView(fsView)
+                            addView(
+                                fsView,
+                                ViewGroup.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT
+                                )
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
     }
 
     if (showStreamsDialog && detectedStreams.isNotEmpty()) {
