@@ -1714,7 +1714,6 @@ private fun JoeLiteBrowserSection(
                 .fillMaxSize()
                 .background(JoeColors.BackgroundDark)
         ) {
-            // 1) Sade üst adres çubuğu
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1898,7 +1897,6 @@ private fun JoeLiteBrowserSection(
                 }
             }
 
-            // 2) Sayfa alanı
             AndroidView(
                 factory = { webView },
                 modifier = Modifier
@@ -1906,7 +1904,6 @@ private fun JoeLiteBrowserSection(
                     .weight(1f)
             )
 
-            // 3) Düzenli alt aksiyon şeridi (yer imleri + hızlı kısayollar + yakalanan yayın + tek menü)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1925,7 +1922,7 @@ private fun JoeLiteBrowserSection(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            imageVector = Icons.Rounded.Bookmarks,
+                            imageVector = Icons.Rounded.Bookmark,
                             contentDescription = null,
                             tint = JoeColors.RedBright,
                             modifier = Modifier.size(13.dp)
@@ -2010,8 +2007,7 @@ private fun JoeLiteBrowserSection(
 
                     DropdownMenu(
                         expanded = showMoreMenu,
-                        onDismissRequest = { showMoreMenu = false },
-                        containerColor = JoeColors.CardDark
+                        onDismissRequest = { showMoreMenu = false }
                     ) {
                         DropdownMenuItem(
                             text = {
@@ -2023,7 +2019,7 @@ private fun JoeLiteBrowserSection(
                             },
                             leadingIcon = {
                                 Icon(
-                                    imageVector = if (isBookmarked) Icons.Rounded.BookmarkRemove else Icons.Rounded.BookmarkAdd,
+                                    imageVector = if (isBookmarked) Icons.Rounded.Bookmark else Icons.Rounded.BookmarkAdd,
                                     contentDescription = null,
                                     tint = JoeColors.RedBright
                                 )
@@ -2106,14 +2102,14 @@ private fun JoeLiteBrowserSection(
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    text = if (desktopMode) "Mobil Görünüm: Açık" else "Masaüstü Görünüm: Kapalı",
+                                    text = if (desktopMode) "Masaüstü Görünüm: Açık" else "Masaüstü Görünüm: Kapalı",
                                     color = if (desktopMode) JoeColors.RedBright else JoeColors.TextPrimary,
                                     fontSize = 13.sp
                                 )
                             },
                             leadingIcon = {
                                 Icon(
-                                    imageVector = if (desktopMode) Icons.Rounded.DesktopWindows else Icons.Rounded.PhoneAndroid,
+                                    imageVector = if (desktopMode) Icons.Rounded.DesktopWindows else Icons.Rounded.Language,
                                     contentDescription = null,
                                     tint = if (desktopMode) JoeColors.RedBright else JoeColors.TextSecondary
                                 )
