@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.util.LruCache
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -69,7 +70,9 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
@@ -221,7 +224,11 @@ data class JoePlaybackSession(
     val channel: JoeChannelItem,
     val streamUrl: String,
     val episodes: List<JoeEpisodeItem> = emptyList(),
-    val currentEpisodeIndex: Int = -1
+    val currentEpisodeIndex: Int = -1,
+    val refererUrl: String = "",
+    val userAgent: String = "",
+    val cookieHeader: String = "",
+    val returnToBrowserOnClose: Boolean = false
 )
 
 enum class JoeTab(val label: String, val icon: ImageVector) {
@@ -912,14 +919,22 @@ fun JoeMainScreen() {
         item: JoeChannelItem,
         url: String,
         episodes: List<JoeEpisodeItem> = emptyList(),
-        episodeIndex: Int = -1
+        episodeIndex: Int = -1,
+        refererUrl: String = "",
+        userAgent: String = "",
+        cookieHeader: String = "",
+        returnToBrowserOnClose: Boolean = false
     ) {
         if (url.isNotBlank()) {
             playbackSession = JoePlaybackSession(
                 channel = item,
                 streamUrl = url,
                 episodes = episodes,
-                currentEpisodeIndex = episodeIndex
+                currentEpisodeIndex = episodeIndex,
+                refererUrl = refererUrl,
+                userAgent = userAgent,
+                cookieHeader = cookieHeader,
+                returnToBrowserOnClose = returnToBrowserOnClose
             )
         }
     }
@@ -1011,7 +1026,11 @@ fun JoeMainScreen() {
                 }
             },
             onClosePlayer = {
+                val shouldReturnBrowser = session.returnToBrowserOnClose
                 playbackSession = null
+                if (shouldReturnBrowser) {
+                    selectedTab = JoeTab.BROWSER
+                }
             }
         )
         return
@@ -1166,7 +1185,7 @@ fun JoeMainScreen() {
                 }
                 JoeTab.BROWSER -> {
                     JoeLiteBrowserSection(
-                        onPlayDetectedMedia = { mediaTitle, mediaUrl ->
+                        onPlayDetectedMedia = { mediaTitle, mediaUrl, pageUrl, ua, cookies ->
                             val webItem = JoeChannelItem(
                                 id = "web_${mediaUrl.hashCode()}",
                                 title = mediaTitle.ifBlank { "Web Yayını" },
@@ -1176,7 +1195,14 @@ fun JoeMainScreen() {
                                 category = MediaCategory.LIVE,
                                 isLive = mediaUrl.contains(".m3u8", ignoreCase = true)
                             )
-                            startStream(webItem, mediaUrl)
+                            startStream(
+                                item = webItem,
+                                url = mediaUrl,
+                                refererUrl = pageUrl,
+                                userAgent = ua,
+                                cookieHeader = cookies,
+                                returnToBrowserOnClose = true
+                            )
                         }
                     )
                 }
@@ -1249,13 +1275,20 @@ fun JoeMainScreen() {
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun JoeLiteBrowserSection(
-    onPlayDetectedMedia: (String, String) -> Unit
+    onPlayDetectedMedia: (
+        title: String,
+        streamUrl: String,
+        refererUrl: String,
+        userAgent: String,
+        cookieHeader: String
+    ) -> Unit
 ) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
 
     val homeUrl = "https://www.google.com"
     var addressText by remember { mutableStateOf(homeUrl) }
+    var currentPageUrl by remember { mutableStateOf(homeUrl) }
     var currentPageTitle by remember { mutableStateOf("JOE Tarayıcı") }
     var pageProgress by remember { mutableIntStateOf(100) }
     var canGoBack by remember { mutableStateOf(false) }
@@ -1281,12 +1314,15 @@ private fun JoeLiteBrowserSection(
 
     fun isMediaStreamUrl(raw: String): Boolean {
         val lower = raw.lowercase(Locale.ROOT)
-        if (lower.startsWith("blob:") || lower.startsWith("data:")) return false
+        if (lower.startsWith("blob:") || lower.startsWith("data:") || lower.startsWith("javascript:")) {
+            return false
+        }
+        if (lower.contains("googlesyndication") || lower.contains("doubleclick") || lower.contains("adsystem")) {
+            return false
+        }
         return lower.contains(".m3u8") ||
             lower.contains(".mp4") ||
             lower.contains(".mpd") ||
-            lower.contains(".ts?") ||
-            lower.endsWith(".ts") ||
             lower.contains("playlist.m3u8") ||
             lower.contains("master.m3u8")
     }
@@ -1298,6 +1334,8 @@ private fun JoeLiteBrowserSection(
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(android.graphics.Color.parseColor("#1D2E36"))
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -1314,6 +1352,8 @@ private fun JoeLiteBrowserSection(
             webChromeClient = object : WebChromeClient() {
                 override fun onProgressChanged(view: WebView?, newProgress: Int) {
                     pageProgress = newProgress
+                    canGoBack = view?.canGoBack() == true
+                    canGoForward = view?.canGoForward() == true
                 }
 
                 override fun onReceivedTitle(view: WebView?, title: String?) {
@@ -1333,6 +1373,7 @@ private fun JoeLiteBrowserSection(
                         return true
                     }
                     addressText = target
+                    currentPageUrl = target
                     return false
                 }
 
@@ -1362,6 +1403,7 @@ private fun JoeLiteBrowserSection(
                 override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                     if (!url.isNullOrBlank()) {
                         addressText = url
+                        currentPageUrl = url
                     }
                     canGoBack = view?.canGoBack() == true
                     canGoForward = view?.canGoForward() == true
@@ -1370,6 +1412,7 @@ private fun JoeLiteBrowserSection(
                 override fun onPageFinished(view: WebView?, url: String?) {
                     if (!url.isNullOrBlank()) {
                         addressText = url
+                        currentPageUrl = url
                     }
                     canGoBack = view?.canGoBack() == true
                     canGoForward = view?.canGoForward() == true
@@ -1377,6 +1420,17 @@ private fun JoeLiteBrowserSection(
             }
             loadUrl(homeUrl)
         }
+    }
+
+    fun launchStreamWithHeaders(streamUrl: String) {
+        val activeUrl = webView.url?.takeIf { it.isNotBlank() } ?: currentPageUrl
+        val activeUa = webView.settings.userAgentString.orEmpty()
+        val cookies = runCatching {
+            CookieManager.getInstance().getCookie(streamUrl)
+                ?: CookieManager.getInstance().getCookie(activeUrl)
+                ?: ""
+        }.getOrDefault("")
+        onPlayDetectedMedia(currentPageTitle, streamUrl, activeUrl, activeUa, cookies)
     }
 
     fun navigateToInput(rawInput: String) {
@@ -1389,12 +1443,19 @@ private fun JoeLiteBrowserSection(
         }
         detectedStreams = emptyList()
         addressText = targetUrl
+        currentPageUrl = targetUrl
         webView.loadUrl(targetUrl)
         focusManager.clearFocus()
     }
 
-    BackHandler(enabled = canGoBack) {
-        webView.goBack()
+    BackHandler(enabled = canGoBack || webView.canGoBack()) {
+        if (webView.canGoBack()) {
+            webView.goBack()
+            canGoBack = webView.canGoBack()
+            canGoForward = webView.canGoForward()
+        } else {
+            canGoBack = false
+        }
     }
 
     DisposableEffect(Unit) {
@@ -1422,27 +1483,39 @@ private fun JoeLiteBrowserSection(
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             IconButton(
-                onClick = { if (webView.canGoBack()) webView.goBack() },
-                enabled = canGoBack,
+                onClick = {
+                    if (webView.canGoBack()) {
+                        webView.goBack()
+                        canGoBack = webView.canGoBack()
+                        canGoForward = webView.canGoForward()
+                    }
+                },
+                enabled = canGoBack || webView.canGoBack(),
                 modifier = Modifier.size(34.dp)
             ) {
                 Icon(
                     imageVector = Icons.Rounded.ArrowBack,
                     contentDescription = "Geri",
-                    tint = if (canGoBack) JoeColors.TextPrimary else JoeColors.TextSecondary.copy(alpha = 0.4f),
+                    tint = if (canGoBack || webView.canGoBack()) JoeColors.TextPrimary else JoeColors.TextSecondary.copy(alpha = 0.4f),
                     modifier = Modifier.size(20.dp)
                 )
             }
 
             IconButton(
-                onClick = { if (webView.canGoForward()) webView.goForward() },
-                enabled = canGoForward,
+                onClick = {
+                    if (webView.canGoForward()) {
+                        webView.goForward()
+                        canGoBack = webView.canGoBack()
+                        canGoForward = webView.canGoForward()
+                    }
+                },
+                enabled = canGoForward || webView.canGoForward(),
                 modifier = Modifier.size(34.dp)
             ) {
                 Icon(
                     imageVector = Icons.Rounded.ArrowForward,
                     contentDescription = "İleri",
-                    tint = if (canGoForward) JoeColors.TextPrimary else JoeColors.TextSecondary.copy(alpha = 0.4f),
+                    tint = if (canGoForward || webView.canGoForward()) JoeColors.TextPrimary else JoeColors.TextSecondary.copy(alpha = 0.4f),
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -1559,7 +1632,7 @@ private fun JoeLiteBrowserSection(
                         .background(JoeColors.RedPrimary)
                         .clickable {
                             if (detectedStreams.size == 1) {
-                                onPlayDetectedMedia(currentPageTitle, detectedStreams.first())
+                                launchStreamWithHeaders(detectedStreams.first())
                             } else {
                                 showStreamsDialog = true
                             }
@@ -1629,7 +1702,7 @@ private fun JoeLiteBrowserSection(
                                 .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(8.dp))
                                 .clickable {
                                     showStreamsDialog = false
-                                    onPlayDetectedMedia(currentPageTitle, streamLink)
+                                    launchStreamWithHeaders(streamLink)
                                 }
                                 .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -1983,10 +2056,42 @@ fun JoeVideoPlayerScreen(
     val trackOptions = listOf("TR Dublaj", "TR Altyazı", "EN Altyazı", "Orijinal")
     val qualityOptions = listOf("Oto", "720p", "1080p")
 
-    val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
-            playWhenReady = true
+    val exoPlayer = remember(session.refererUrl, session.userAgent, session.cookieHeader) {
+        val headers = mutableMapOf<String, String>()
+        if (session.refererUrl.isNotBlank()) {
+            headers["Referer"] = session.refererUrl
+            runCatching {
+                val uri = URL(session.refererUrl)
+                val origin = "${uri.protocol}://${uri.host}" +
+                    if (uri.port in 1..65535) ":${uri.port}" else ""
+                headers["Origin"] = origin
+            }
         }
+        if (session.cookieHeader.isNotBlank()) {
+            headers["Cookie"] = session.cookieHeader
+        }
+
+        val effectiveUa = session.userAgent.ifBlank {
+            "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+        }
+
+        val dataSourceFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent(effectiveUa)
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(15000)
+            .setReadTimeoutMs(20000)
+            .apply {
+                if (headers.isNotEmpty()) {
+                    setDefaultRequestProperties(headers)
+                }
+            }
+
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .build()
+            .apply {
+                playWhenReady = true
+            }
     }
 
     fun formatDuration(ms: Long): String {
@@ -2055,22 +2160,19 @@ fun JoeVideoPlayerScreen(
         }
     }
 
-    LaunchedEffect(streamUrl) {
+    LaunchedEffect(streamUrl, exoPlayer) {
         playerError = null
         isBuffering = true
         currentPosMs = 0L
         durationMs = 0L
-        val fallbackUrl = if (streamUrl.endsWith(".m3u8")) {
-            streamUrl.removeSuffix(".m3u8") + ".ts"
-        } else {
-            streamUrl
-        }
         exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
         exoPlayer.playbackParameters = PlaybackParameters(speedOptions[playbackSpeedIndex].first)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
+    }
 
-        exoPlayer.addListener(object : Player.Listener {
+    DisposableEffect(exoPlayer, streamUrl) {
+        val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
             }
@@ -2080,16 +2182,14 @@ fun JoeVideoPlayerScreen(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                if (fallbackUrl != streamUrl && exoPlayer.currentMediaItem?.localConfiguration?.uri.toString() == streamUrl) {
-                    exoPlayer.setMediaItem(MediaItem.fromUri(fallbackUrl))
-                    exoPlayer.prepare()
-                    exoPlayer.playWhenReady = true
-                } else {
-                    isBuffering = false
-                    playerError = "Yayın açılamadı: ${error.errorCodeName}"
-                }
+                isBuffering = false
+                playerError = "Yayın açılamadı: ${error.errorCodeName}"
             }
-        })
+        }
+        exoPlayer.addListener(listener)
+        onDispose {
+            exoPlayer.removeListener(listener)
+        }
     }
 
     LaunchedEffect(playbackSpeedIndex) {
@@ -2140,7 +2240,7 @@ fun JoeVideoPlayerScreen(
         }
     }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(exoPlayer) {
         onDispose {
             activity?.let { act ->
                 act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
@@ -2181,6 +2281,7 @@ fun JoeVideoPlayerScreen(
                 }
             },
             update = { view ->
+                view.player = exoPlayer
                 view.resizeMode = currentResizeMode
             },
             modifier = Modifier.fillMaxSize()
@@ -2225,20 +2326,32 @@ fun JoeVideoPlayerScreen(
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Button(
-                    onClick = {
-                        playerError = null
-                        isBuffering = true
-                        exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
-                        exoPlayer.prepare()
-                        exoPlayer.playWhenReady = true
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = JoeColors.RedPrimary,
-                        contentColor = JoeColors.TextPrimary
-                    )
-                ) {
-                    Text("Tekrar Dene", fontWeight = FontWeight.Bold)
+                Text(
+                    text = "Site koruması doğrudan akışı engelliyor olabilir. Tarayıcıya dönüp sayfadan izleyebilirsin.",
+                    color = JoeColors.TextSecondary,
+                    fontSize = 12.sp
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(
+                        onClick = {
+                            playerError = null
+                            isBuffering = true
+                            exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
+                            exoPlayer.prepare()
+                            exoPlayer.playWhenReady = true
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = JoeColors.RedPrimary,
+                            contentColor = JoeColors.TextPrimary
+                        )
+                    ) {
+                        Text("Tekrar Dene", fontWeight = FontWeight.Bold)
+                    }
+                    OutlinedButton(
+                        onClick = { exitFullScreenAndClose() }
+                    ) {
+                        Text("Tarayıcıya Dön", color = JoeColors.TextPrimary)
+                    }
                 }
             }
         }
@@ -2560,7 +2673,7 @@ fun JoeVideoPlayerScreen(
                         }
                     }
 
-                    if (channels.isNotEmpty() && session.episodes.isEmpty()) {
+                    if (channels.isNotEmpty() && session.episodes.isEmpty() && !session.returnToBrowserOnClose) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
