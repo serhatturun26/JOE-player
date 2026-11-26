@@ -2,7 +2,10 @@ package com.joe.player
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -19,6 +22,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -1412,6 +1416,8 @@ private fun JoeLiteBrowserSection(
     var showStreamsDialog by remember { mutableStateOf(false) }
     var showBookmarksDialog by remember { mutableStateOf(false) }
     var showHistoryDialog by remember { mutableStateOf(false) }
+    var showFindBar by remember { mutableStateOf(false) }
+    var findQuery by remember { mutableStateOf("") }
     var customFullscreenView by remember { mutableStateOf<View?>(null) }
     var customFullscreenCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
@@ -1492,6 +1498,7 @@ private fun JoeLiteBrowserSection(
         val isFs = customFullscreenView != null
         onFullscreenChanged(isFs)
         if (isFs) {
+            showFindBar = false
             activity?.let { act ->
                 val insetsController = WindowInsetsControllerCompat(act.window, act.window.decorView)
                 act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
@@ -1632,6 +1639,8 @@ private fun JoeLiteBrowserSection(
 
     fun navigateToInput(rawInput: String) {
         exitWebFullscreen()
+        showFindBar = false
+        webView.clearMatches()
         val trimmed = rawInput.trim()
         if (trimmed.isEmpty()) return
         val targetUrl = when {
@@ -1646,9 +1655,32 @@ private fun JoeLiteBrowserSection(
         focusManager.clearFocus()
     }
 
-    BackHandler(enabled = customFullscreenView != null || canGoBack || webView.canGoBack()) {
+    fun copyCurrentUrl() {
+        val target = webView.url?.takeIf { it.isNotBlank() } ?: currentPageUrl
+        if (target.isBlank()) return
+        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        cm?.setPrimaryClip(ClipData.newPlainText("JOE Tarayıcı Bağlantısı", target))
+        Toast.makeText(context, "Bağlantı kopyalandı", Toast.LENGTH_SHORT).show()
+    }
+
+    fun shareCurrentUrl() {
+        val target = webView.url?.takeIf { it.isNotBlank() } ?: currentPageUrl
+        if (target.isBlank()) return
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, currentPageTitle)
+            putExtra(Intent.EXTRA_TEXT, target)
+        }
+        context.startActivity(Intent.createChooser(intent, "Bağlantıyı Paylaş"))
+    }
+
+    BackHandler(enabled = customFullscreenView != null || showFindBar || canGoBack || webView.canGoBack()) {
         if (customFullscreenView != null) {
             exitWebFullscreen()
+        } else if (showFindBar) {
+            showFindBar = false
+            findQuery = ""
+            webView.clearMatches()
         } else if (webView.canGoBack()) {
             webView.goBack()
             canGoBack = webView.canGoBack()
@@ -1662,6 +1694,7 @@ private fun JoeLiteBrowserSection(
         onDispose {
             exitWebFullscreen()
             runCatching {
+                webView.clearMatches()
                 webView.stopLoading()
                 webView.clearHistory()
                 webView.clearCache(true)
@@ -1821,6 +1854,80 @@ private fun JoeLiteBrowserSection(
                 }
             }
 
+            if (showFindBar) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(JoeColors.CardDark)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedTextField(
+                        value = findQuery,
+                        onValueChange = { q ->
+                            findQuery = q
+                            if (q.isNotBlank()) {
+                                webView.findAllAsync(q)
+                            } else {
+                                webView.clearMatches()
+                            }
+                        },
+                        singleLine = true,
+                        placeholder = {
+                            Text(
+                                text = "Sayfada kelime ara...",
+                                color = JoeColors.TextSecondary,
+                                fontSize = 12.sp
+                            )
+                        },
+                        textStyle = LocalTextStyle.current.copy(
+                            color = JoeColors.TextPrimary,
+                            fontSize = 13.sp
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    IconButton(
+                        onClick = { webView.findNext(false) },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.KeyboardArrowUp,
+                            contentDescription = "Önceki",
+                            tint = JoeColors.TextPrimary
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { webView.findNext(true) },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = "Sonraki",
+                            tint = JoeColors.TextPrimary
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            showFindBar = false
+                            findQuery = ""
+                            webView.clearMatches()
+                        },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Kapat",
+                            tint = JoeColors.TextSecondary
+                        )
+                    }
+                }
+            }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1855,6 +1962,95 @@ private fun JoeLiteBrowserSection(
                                     color = JoeColors.RedBright,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(if (showFindBar) JoeColors.RedPrimary else JoeColors.CardDark)
+                                .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(14.dp))
+                                .clickable {
+                                    showFindBar = !showFindBar
+                                    if (!showFindBar) {
+                                        findQuery = ""
+                                        webView.clearMatches()
+                                    } else if (findQuery.isNotBlank()) {
+                                        webView.findAllAsync(findQuery)
+                                    }
+                                }
+                                .padding(horizontal = 9.dp, vertical = 4.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Search,
+                                    contentDescription = null,
+                                    tint = JoeColors.TextPrimary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = "Bul",
+                                    color = JoeColors.TextPrimary,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(JoeColors.CardDark)
+                                .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(14.dp))
+                                .clickable { copyCurrentUrl() }
+                                .padding(horizontal = 9.dp, vertical = 4.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Rounded.ContentCopy,
+                                    contentDescription = null,
+                                    tint = JoeColors.TextPrimary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = "Kopyala",
+                                    color = JoeColors.TextPrimary,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(JoeColors.CardDark)
+                                .border(1.dp, JoeColors.RedMuted, RoundedCornerShape(14.dp))
+                                .clickable { shareCurrentUrl() }
+                                .padding(horizontal = 9.dp, vertical = 4.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Share,
+                                    contentDescription = null,
+                                    tint = JoeColors.TextPrimary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = "Paylaş",
+                                    color = JoeColors.TextPrimary,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
                                 )
                             }
                         }
