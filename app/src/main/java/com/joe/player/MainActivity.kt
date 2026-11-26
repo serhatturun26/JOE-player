@@ -857,6 +857,13 @@ fun JoeMainScreen() {
     var detailTarget by remember { mutableStateOf<JoeChannelItem?>(null) }
     var playbackSession by remember { mutableStateOf<JoePlaybackSession?>(null) }
     var showAddPlaylistDialog by remember { mutableStateOf(false) }
+    var isBrowserFullscreen by remember { mutableStateOf(false) }
+
+    LaunchedEffect(selectedTab) {
+        if (selectedTab != JoeTab.BROWSER) {
+            isBrowserFullscreen = false
+        }
+    }
 
     val allTabCategories by remember(allItems, selectedTab) {
         derivedStateOf {
@@ -927,6 +934,7 @@ fun JoeMainScreen() {
         returnToBrowserOnClose: Boolean = false
     ) {
         if (url.isNotBlank()) {
+            isBrowserFullscreen = false
             playbackSession = JoePlaybackSession(
                 channel = item,
                 streamUrl = url,
@@ -1037,10 +1045,12 @@ fun JoeMainScreen() {
         return
     }
 
+    val hideChromeForBrowserFullscreen = selectedTab == JoeTab.BROWSER && isBrowserFullscreen
+
     Scaffold(
         containerColor = JoeColors.BackgroundDark,
         topBar = {
-            if (selectedTab != JoeTab.BROWSER) {
+            if (selectedTab != JoeTab.BROWSER && !hideChromeForBrowserFullscreen) {
                 JoeTopBar(
                     activePlaylistName = activePlaylist?.name,
                     isRefreshing = isRefreshing,
@@ -1051,20 +1061,22 @@ fun JoeMainScreen() {
             }
         },
         bottomBar = {
-            JoeBottomBar(
-                selectedTab = selectedTab,
-                onSelectTab = {
-                    selectedTab = it
-                    selectedCategory = "Tümü"
-                    categorySearchQuery = ""
-                }
-            )
+            if (!hideChromeForBrowserFullscreen) {
+                JoeBottomBar(
+                    selectedTab = selectedTab,
+                    onSelectTab = {
+                        selectedTab = it
+                        selectedCategory = "Tümü"
+                        categorySearchQuery = ""
+                    }
+                )
+            }
         }
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .padding(if (hideChromeForBrowserFullscreen) PaddingValues(0.dp) else innerPadding)
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
@@ -1074,60 +1086,62 @@ fun JoeMainScreen() {
                     )
                 )
         ) {
-            statusMessage?.let { msg ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(JoeColors.RedMuted.copy(alpha = 0.85f))
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = msg,
-                        color = JoeColors.TextPrimary,
-                        fontSize = 12.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = "Kapat",
-                        tint = JoeColors.TextPrimary,
+            if (!hideChromeForBrowserFullscreen) {
+                statusMessage?.let { msg ->
+                    Row(
                         modifier = Modifier
-                            .size(18.dp)
-                            .clickable { statusMessage = null }
+                            .fillMaxWidth()
+                            .background(JoeColors.RedMuted.copy(alpha = 0.85f))
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = msg,
+                            color = JoeColors.TextPrimary,
+                            fontSize = 12.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Kapat",
+                            tint = JoeColors.TextPrimary,
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clickable { statusMessage = null }
+                        )
+                    }
+                }
+
+                if (isRefreshing) {
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = JoeColors.RedBright,
+                        trackColor = JoeColors.CardDark
                     )
                 }
-            }
 
-            if (isRefreshing) {
-                LinearProgressIndicator(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = JoeColors.RedBright,
-                    trackColor = JoeColors.CardDark
-                )
-            }
-
-            if (selectedTab != JoeTab.PLAYLISTS &&
-                selectedTab != JoeTab.BROWSER &&
-                activePlaylist != null &&
-                allTabCategories.size > 1
-            ) {
-                CategorySearchAndFilterSection(
-                    categories = filteredCategories,
-                    selectedCategory = selectedCategory,
-                    searchQuery = categorySearchQuery,
-                    totalCategoryCount = allTabCategories.size - 1,
-                    onSearchQueryChange = { query ->
-                        categorySearchQuery = query
-                        if (selectedCategory != "Tümü" && query.isNotBlank() &&
-                            !selectedCategory.contains(query.trim(), ignoreCase = true)
-                        ) {
-                            selectedCategory = "Tümü"
-                        }
-                    },
-                    onSelectCategory = { selectedCategory = it }
-                )
+                if (selectedTab != JoeTab.PLAYLISTS &&
+                    selectedTab != JoeTab.BROWSER &&
+                    activePlaylist != null &&
+                    allTabCategories.size > 1
+                ) {
+                    CategorySearchAndFilterSection(
+                        categories = filteredCategories,
+                        selectedCategory = selectedCategory,
+                        searchQuery = categorySearchQuery,
+                        totalCategoryCount = allTabCategories.size - 1,
+                        onSearchQueryChange = { query ->
+                            categorySearchQuery = query
+                            if (selectedCategory != "Tümü" && query.isNotBlank() &&
+                                !selectedCategory.contains(query.trim(), ignoreCase = true)
+                            ) {
+                                selectedCategory = "Tümü"
+                            }
+                        },
+                        onSelectCategory = { selectedCategory = it }
+                    )
+                }
             }
 
             when (selectedTab) {
@@ -1186,6 +1200,9 @@ fun JoeMainScreen() {
                 }
                 JoeTab.BROWSER -> {
                     JoeLiteBrowserSection(
+                        onFullscreenChanged = { fullscreen ->
+                            isBrowserFullscreen = fullscreen
+                        },
                         onPlayDetectedMedia = { mediaTitle, mediaUrl, pageUrl, ua, cookies ->
                             val webItem = JoeChannelItem(
                                 id = "web_${mediaUrl.hashCode()}",
@@ -1276,6 +1293,7 @@ fun JoeMainScreen() {
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun JoeLiteBrowserSection(
+    onFullscreenChanged: (Boolean) -> Unit,
     onPlayDetectedMedia: (
         title: String,
         streamUrl: String,
@@ -1336,6 +1354,7 @@ private fun JoeLiteBrowserSection(
         val cb = customFullscreenCallback
         customFullscreenView = null
         customFullscreenCallback = null
+        onFullscreenChanged(false)
         if (viewToRemove != null) {
             (viewToRemove.parent as? ViewGroup)?.removeView(viewToRemove)
         }
@@ -1350,7 +1369,9 @@ private fun JoeLiteBrowserSection(
     }
 
     LaunchedEffect(customFullscreenView) {
-        if (customFullscreenView != null) {
+        val isFs = customFullscreenView != null
+        onFullscreenChanged(isFs)
+        if (isFs) {
             activity?.let { act ->
                 val insetsController = WindowInsetsControllerCompat(act.window, act.window.decorView)
                 act.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
